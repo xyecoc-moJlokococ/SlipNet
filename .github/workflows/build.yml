@@ -82,6 +82,26 @@ jobs:
           # Strip leading whitespace from heredoc indentation
           sed -i 's/^[[:space:]]*//' keystore.properties
 
+      - name: Create CI signing keystore
+        if: env.KEYSTORE_DECODED != 'true'
+        run: |
+          keytool -genkeypair -v \
+            -keystore slipnet-ci.keystore \
+            -storepass android \
+            -keypass android \
+            -alias androiddebugkey \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
+          cat > keystore.properties <<EOF
+          storeFile=../slipnet-ci.keystore
+          storePassword=android
+          keyAlias=androiddebugkey
+          keyPassword=android
+          EOF
+          sed -i 's/^[[:space:]]*//' keystore.properties
+
       - name: Set up local.properties
         env:
           CONFIG_ENCRYPTION_KEY: ${{ secrets.CONFIG_ENCRYPTION_KEY }}

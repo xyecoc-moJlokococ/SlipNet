@@ -22,7 +22,9 @@ object VaydnsBridge {
     /**
      * Start the VayDNS client.
      *
-     * @param dnsServer DNS resolver address (e.g., "8.8.8.8:53")
+     * @param dnsServer DNS resolver address list. Entries may be plain UDP
+     * addresses ("8.8.8.8:53"), DNS-over-TCP ("tcp://8.8.8.8:53"),
+     * DoT ("tls://1.1.1.1:853"), or DoH URLs.
      * @param tunnelDomain The domain configured on the VayDNS/DNSTT server
      * @param publicKey The server's Noise protocol public key (hex encoded)
      * @param listenPort Local port for the tunnel listener
@@ -106,6 +108,7 @@ object VaydnsBridge {
                 when {
                     trimmed.startsWith("https://") -> trimmed
                     trimmed.startsWith("tls://") -> trimmed
+                    trimmed.startsWith("tcp://") -> trimmed
                     trimmed.contains(":") -> trimmed
                     else -> "$trimmed:53"
                 }

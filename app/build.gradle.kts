@@ -16,6 +16,7 @@ plugins {
 val minSdkVersion = 24
 val appVersionName = "2.5.5"
 val appVersionCode = 80
+val buildSlipstreamNative = ((findProperty("BUILD_SLIPSTREAM_NATIVE") as String?) ?: "false").toBoolean()
 val cargoProfile = (findProperty("CARGO_PROFILE") as String?) ?: run {
     val isRelease = gradle.startParameter.taskNames.any { it.contains("Release", ignoreCase = true) }
     if (isRelease) "release" else "debug"
@@ -47,7 +48,7 @@ val configEncryptionKey = localProperties.getProperty("CONFIG_ENCRYPTION_KEY", "
 // OpenSSL configuration
 val opensslVersion = "3.0.15"
 val opensslBaseDir = file("${System.getenv("HOME")}/android-openssl/android-ssl")
-val supportedAbis = listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+val supportedAbis = listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
 
 // Check if OpenSSL is available for all ABIs
 fun isOpenSslAvailable(): Boolean {
@@ -134,7 +135,7 @@ android {
         abi {
             isEnable = true
             reset()
-            include("arm64-v8a", "armeabi-v7a", "x86_64")
+            include("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
             isUniversalApk = true
         }
     }
@@ -309,7 +310,7 @@ cargo {
     rustcCommand = "$cargoBin/rustc"
     module = "src/main/rust/slipstream-rust"
     libname = "slipstream"
-    targets = listOf("arm", "arm64", "x86_64")
+    targets = listOf("arm", "arm64", "x86", "x86_64")
     profile = cargoProfile
     rustupChannel = "stable"
     extraCargoBuildArguments = listOf(
@@ -381,32 +382,47 @@ cargo {
 
 // Make cargo build tasks depend on OpenSSL verification
 tasks.whenTaskAdded {
+    if (!buildSlipstreamNative && name.startsWith("cargo")) {
+        enabled = false
+    }
     when (name) {
-        "cargoBuildArm", "cargoBuildArm64", "cargoBuildX86_64" -> {
-            dependsOn("verifyOpenSsl")
+        "cargoBuildArm", "cargoBuildArm64", "cargoBuildX86", "cargoBuildX86_64" -> {
+            if (buildSlipstreamNative) {
+                dependsOn("verifyOpenSsl")
+            }
         }
-        "mergeFullDebugJniLibFolders", "mergeFullReleaseJniLibFolders",
-        "mergeLiteDebugJniLibFolders", "mergeLiteReleaseJniLibFolders" -> {
-            dependsOn("cargoBuild")
-            // Track Rust JNI output without adding a second source set (avoids duplicate resources).
-            inputs.dir(layout.buildDirectory.dir("rustJniLibs/android"))
+        "mergeFullDebugJniLibFolders", "mergeFullReleaseJniLibFolders" -> {
+            if (buildSlipstreamNative) {
+                dependsOn("cargoBuild")
+                // Track Rust JNI output without adding a second source set (avoids duplicate resources).
+                inputs.dir(layout.buildDirectory.dir("rustJniLibs/android"))
+            }
         }
     }
 }
-
-tasks.register<Exec>("cargoClean") {
-    executable("$cargoBin/cargo")
-    args("clean")
-    workingDir("$projectDir/${cargo.module}")
+if (!buildSlipstreamNative) {
+    tasks.matching { it.name.startsWith("cargo") }.configureEach {
+        enabled = false
+    }
 }
-tasks.named("clean") {
-    dependsOn("cargoClean")
+
+if (buildSlipstreamNative) {
+    tasks.register<Exec>("cargoClean") {
+        executable("$cargoBin/cargo")
+        args("clean")
+        workingDir("$projectDir/${cargo.module}")
+    }
+    tasks.named("clean") {
+        dependsOn("cargoClean")
+    }
+} else {
+    tasks.register("cargoClean")
 }
 
 dependencies {
-    // Go libraries — flavor-specific AARs built via: cd gomobile-build && make build
-    // Full: DNSTT + Snowflake, Lite: DNSTT only (smaller binary)
-    "fullImplementation"(files("libs/golibs-full.aar"))
+    // Go libraries built via: cd gomobile-build && make build-lite.
+    // This fork builds the Lite VayDNS-focused bundle only.
+    "fullImplementation"(files("libs/golibs.aar"))
     "liteImplementation"(files("libs/golibs-lite.aar"))
 
     // Tor binary for Snowflake tunnel — libtor.so extracted from

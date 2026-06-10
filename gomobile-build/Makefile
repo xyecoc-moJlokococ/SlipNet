@@ -1,21 +1,18 @@
 .PHONY: build build-full build-lite clean
 
-# Default: build both
-build: build-full build-lite
+GOMOBILE_TARGETS ?= android/arm,android/arm64,android/386,android/amd64
+
+# Default: build the Lite gomobile bundle used by the VayDNS-focused APK.
+build: build-lite
 
 build-full:
-	gomobile bind -trimpath -target android/arm,android/arm64,android/amd64 -androidapi 21 \
-		-ldflags '-s -w -checklinkname=0 -extldflags -Wl,-z,max-page-size=16384,-z,common-page-size=16384' \
-		-o ../app/libs/golibs-full.aar \
-		noizdns/mobile \
-		vaydns-mobile/vaydns \
-		snowflake-mobile/snowflake
+	@echo "Full gomobile bundle is not built in this fork; use build-lite."
 
 build-lite:
-	gomobile bind -trimpath -target android/arm,android/arm64,android/amd64 -androidapi 21 \
+	gomobile bind -trimpath -target $(GOMOBILE_TARGETS) -androidapi 21 \
 		-ldflags '-s -w -checklinkname=0 -extldflags -Wl,-z,max-page-size=16384,-z,common-page-size=16384' \
 		-o ../app/libs/golibs-lite.aar \
-		noizdns/mobile \
+		dnstt-mobile/mobile \
 		vaydns-mobile/vaydns
 
 clean:

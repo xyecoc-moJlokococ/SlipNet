@@ -147,12 +147,6 @@ android {
         }
     }
 
-    sourceSets {
-        getByName("main") {
-            jniLibs.srcDir(layout.buildDirectory.dir("rustJniLibs/android"))
-        }
-    }
-
     // Build hev-socks5-tunnel with ndk-build
     externalNativeBuild {
         ndkBuild {

@@ -342,20 +342,30 @@ fun EditProfileScreen(
                         verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
 
-                            // DNS Transport selector (DNSTT-based profiles only)
-                            if (uiState.isDnsttOrNoizOrVaydnsBased) {
+                            // DNS resolver transport.
+                            if (uiState.isDnsttOrNoizOrVaydnsBased || uiState.isSlipstreamBased) {
                                 Text(
                                     text = "DNS Transport",
                                     style = MaterialTheme.typography.titleMedium,
                                     modifier = Modifier.padding(top = 8.dp)
                                 )
 
+                                val transportOptions = if (uiState.isSlipstreamBased) {
+                                    listOf(DnsTransport.UDP, DnsTransport.TCP)
+                                } else {
+                                    DnsTransport.entries
+                                }
+                                val selectedTransport = if (uiState.isSlipstreamBased && uiState.dnsTransport != DnsTransport.TCP) {
+                                    DnsTransport.UDP
+                                } else {
+                                    uiState.dnsTransport
+                                }
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    DnsTransport.entries.forEach { transport ->
-                                        if (uiState.dnsTransport == transport) {
+                                    transportOptions.forEach { transport ->
+                                        if (selectedTransport == transport) {
                                             Button(
                                                 onClick = { },
                                                 modifier = Modifier.weight(1f)
@@ -1648,20 +1658,30 @@ fun EditProfileScreen(
                     )
                 }
 
-                // DNS Transport selector (DNSTT-based profiles only)
-                if (uiState.isDnsttOrNoizOrVaydnsBased) {
+                // DNS resolver transport.
+                if (uiState.isDnsttOrNoizOrVaydnsBased || uiState.isSlipstreamBased) {
                     Text(
                         text = "DNS Transport",
                         style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier.padding(top = 8.dp)
                     )
 
+                    val transportOptions = if (uiState.isSlipstreamBased) {
+                        listOf(DnsTransport.UDP, DnsTransport.TCP)
+                    } else {
+                        DnsTransport.entries
+                    }
+                    val selectedTransport = if (uiState.isSlipstreamBased && uiState.dnsTransport != DnsTransport.TCP) {
+                        DnsTransport.UDP
+                    } else {
+                        uiState.dnsTransport
+                    }
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        DnsTransport.entries.forEach { transport ->
-                            if (uiState.dnsTransport == transport) {
+                        transportOptions.forEach { transport ->
+                            if (selectedTransport == transport) {
                                 Button(
                                     onClick = { },
                                     modifier = Modifier.weight(1f)

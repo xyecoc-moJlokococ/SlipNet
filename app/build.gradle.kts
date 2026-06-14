@@ -147,6 +147,12 @@ android {
         }
     }
 
+    sourceSets {
+        getByName("main") {
+            jniLibs.srcDir(layout.buildDirectory.dir("rustJniLibs/android"))
+        }
+    }
+
     // Build hev-socks5-tunnel with ndk-build
     externalNativeBuild {
         ndkBuild {
@@ -380,23 +386,19 @@ cargo {
     }
 }
 
-// Make cargo build tasks depend on OpenSSL verification
-tasks.whenTaskAdded {
+// Make every APK variant package the Rust JNI output when native Slipstream is enabled.
+tasks.configureEach {
     if (!buildSlipstreamNative && name.startsWith("cargo")) {
         enabled = false
     }
-    when (name) {
-        "cargoBuildArm", "cargoBuildArm64", "cargoBuildX86", "cargoBuildX86_64" -> {
-            if (buildSlipstreamNative) {
-                dependsOn("verifyOpenSsl")
-            }
+    if (buildSlipstreamNative) {
+        if (name in listOf("cargoBuildArm", "cargoBuildArm64", "cargoBuildX86", "cargoBuildX86_64")) {
+            dependsOn("verifyOpenSsl")
         }
-        "mergeFullDebugJniLibFolders", "mergeFullReleaseJniLibFolders" -> {
-            if (buildSlipstreamNative) {
-                dependsOn("cargoBuild")
-                // Track Rust JNI output without adding a second source set (avoids duplicate resources).
-                inputs.dir(layout.buildDirectory.dir("rustJniLibs/android"))
-            }
+        if (name.startsWith("merge") && name.endsWith("JniLibFolders")) {
+            dependsOn("cargoBuild")
+            // Track Rust JNI output for incremental builds.
+            inputs.dir(layout.buildDirectory.dir("rustJniLibs/android"))
         }
     }
 }

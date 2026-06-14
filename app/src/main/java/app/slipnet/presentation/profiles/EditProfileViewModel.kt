@@ -1482,6 +1482,11 @@ class EditProfileViewModel @Inject constructor(
                     parseResolvers(state.resolvers, state.authoritativeMode || state.dnsttAuthoritative)
                 }
                 val keepAlive = state.keepAliveInterval.toIntOrNull() ?: 5000
+                val savedDnsTransport = when {
+                    state.isDnsttOrNoizOrVaydnsBased -> state.dnsTransport
+                    state.isSlipstreamBased && state.dnsTransport == DnsTransport.TCP -> DnsTransport.TCP
+                    else -> DnsTransport.UDP
+                }
 
                 val profile = ServerProfile(
                     id = state.profileId ?: 0,
@@ -1501,7 +1506,7 @@ class EditProfileViewModel @Inject constructor(
                     sshPort = state.sshPort.toIntOrNull() ?: 22,
                     sshHost = "127.0.0.1",
                     dohUrl = if (state.isDoh || (state.isDnsttOrNoizOrVaydnsBased && state.dnsTransport == DnsTransport.DOH)) state.dohUrl.trim() else "",
-                    dnsTransport = if (state.isDnsttOrNoizOrVaydnsBased) state.dnsTransport else DnsTransport.UDP,
+                    dnsTransport = savedDnsTransport,
                     sshAuthType = if (state.useSsh) state.sshAuthType else SshAuthType.PASSWORD,
                     sshPrivateKey = if (state.useSsh && state.sshAuthType == SshAuthType.KEY) state.sshPrivateKey else "",
                     sshKeyPassphrase = if (state.useSsh && state.sshAuthType == SshAuthType.KEY) state.sshKeyPassphrase else "",

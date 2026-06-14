@@ -122,6 +122,22 @@ jobs:
           mkdir -p release-apks
           cp app/build/outputs/apk/lite/release/SlipNet-*-lite-*.apk release-apks/ 2>/dev/null || true
 
+      - name: Verify Slipstream native library is packaged
+        run: |
+          shopt -s nullglob
+          apks=(release-apks/*.apk)
+          if [ "${#apks[@]}" -eq 0 ]; then
+            echo "No APKs found in release-apks" >&2
+            exit 1
+          fi
+          for apk in "${apks[@]}"; do
+            echo "Checking $apk"
+            if ! unzip -l "$apk" | grep -Eq 'lib/.*/libslipstream[.]so'; then
+              echo "Missing libslipstream.so in $apk" >&2
+              exit 1
+            fi
+          done
+
       - name: Upload Release APKs
         uses: actions/upload-artifact@v4
         with:

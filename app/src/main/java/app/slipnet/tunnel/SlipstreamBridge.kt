@@ -11,11 +11,15 @@ import app.slipnet.util.AppLog as Log
 @Suppress("KotlinJniMissingFunction")
 object SlipstreamBridge {
     private const val TAG = "SlipstreamBridge"
+    const val OWNER_VPN = "vpn"
+    const val OWNER_PROBE = "probe"
     const val DEFAULT_SLIPSTREAM_PORT = 1080
     const val DEFAULT_LISTEN_HOST = "127.0.0.1"
 
     private var isLibraryLoaded = false
     private var currentPort = DEFAULT_SLIPSTREAM_PORT
+    @Volatile
+    private var currentOwner: String? = null
 
     // Strong reference — cleared explicitly in setVpnService(null) after stopClient().
     // WeakReference would allow GC to collect the service while native code still
@@ -93,6 +97,7 @@ object SlipstreamBridge {
      * @param debugStreams Enable debug logging for streams
      * @param resolverTransport DNS resolver carrier: "udp" or "tcp"
      */
+    @Synchronized
     fun startClient(
         domain: String,
         resolvers: List<ResolverConfig>,
@@ -105,16 +110,25 @@ object SlipstreamBridge {
         debugStreams: Boolean = false,
         idlePollIntervalMs: Int = 10000,
         idleTimeoutMs: Int = 120000,
-        resolverTransport: String = "udp"
+        resolverTransport: String = "udp",
+        owner: String = OWNER_VPN
     ): Result<Unit> {
         if (!isLibraryLoaded) {
             return Result.failure(IllegalStateException("Native library not loaded"))
         }
 
-        // Stop any previous instance
         if (isNativeRunning()) {
-            Log.w(TAG, "Slipstream client already running, stopping first...")
-            stopClient()
+            val activeOwner = currentOwner ?: OWNER_VPN
+            val canReplace = activeOwner == owner || (owner == OWNER_VPN && activeOwner == OWNER_PROBE)
+            if (!canReplace) {
+                val message = "Slipstream client already running for $activeOwner; refusing $owner start"
+                Log.w(TAG, message)
+                return Result.failure(IllegalStateException(message))
+            }
+            Log.w(TAG, "Slipstream client already running for $activeOwner, stopping before $owner start...")
+            stopClientInternal()
+        } else {
+            currentOwner = null
         }
 
         // Wait briefly for port to become free, then fall back to alternative ports.
@@ -167,12 +181,16 @@ object SlipstreamBridge {
 
             when (result) {
                 0 -> {
+                    currentOwner = owner
                     Log.i(TAG, "Slipstream client started successfully")
                     Result.success(Unit)
                 }
-                -1 -> Result.failure(RuntimeException("Invalid domain"))
-                -2 -> Result.failure(RuntimeException("Invalid resolver configuration"))
-                -10 -> Result.failure(RuntimeException("Failed to spawn client thread"))
+                -1 -> startFailure(RuntimeException("Invalid domain"))
+                -2 -> startFailure(RuntimeException("Invalid resolver configuration"))
+                -10 -> {
+                    val nativeError = try { nativeGetLastError()?.takeIf { it.isNotEmpty() } } catch (_: Exception) { null }
+                    startFailure(RuntimeException(nativeError ?: "Failed to spawn client thread"))
+                }
                 -11 -> {
                     // -11 means "client died before listener ready" — could be port
                     // conflict OR another startup error (UDP bind, socket protection).
@@ -186,19 +204,25 @@ object SlipstreamBridge {
                         retryOnAlternatePort(
                             tcpListenPort, actualPort, domain, resolvers, congestionControl,
                             keepAliveInterval, tcpListenHost, gsoEnabled, debugPoll, debugStreams,
-                            idlePollIntervalMs, idleTimeoutMs, nativeResolverTransport
+                            idlePollIntervalMs, idleTimeoutMs, nativeResolverTransport, owner
                         )
                     } else {
                         val detail = nativeError ?: "unknown startup error"
-                        Result.failure(RuntimeException("Failed to start client: $detail"))
+                        startFailure(RuntimeException("Failed to start client: $detail"))
                     }
                 }
-                else -> Result.failure(RuntimeException("Failed to start client: error $result"))
+                else -> startFailure(RuntimeException("Failed to start client: error $result"))
             }
         } catch (e: Exception) {
             Log.e(TAG, "Exception starting slipstream client", e)
+            if (!isNativeRunning()) currentOwner = null
             Result.failure(e)
         }
+    }
+
+    private fun startFailure(error: Throwable): Result<Unit> {
+        if (!isNativeRunning()) currentOwner = null
+        return Result.failure(error)
     }
 
     /**
@@ -218,7 +242,8 @@ object SlipstreamBridge {
         debugStreams: Boolean,
         idlePollIntervalMs: Int,
         idleTimeoutMs: Int,
-        resolverTransport: String
+        resolverTransport: String,
+        owner: String
     ): Result<Unit> {
         for (offset in 10..50 step 10) {
             val alt = basePort + offset
@@ -245,12 +270,13 @@ object SlipstreamBridge {
             )
 
             if (result == 0) {
+                currentOwner = owner
                 Log.i(TAG, "Slipstream client started successfully on alternative port $alt")
                 return Result.success(Unit)
             }
             Log.w(TAG, "Alternative port $alt also failed (error $result)")
         }
-        return Result.failure(RuntimeException("Failed to listen on port $failedPort (alternatives exhausted)"))
+        return startFailure(RuntimeException("Failed to listen on port $failedPort (alternatives exhausted)"))
     }
 
     private fun waitForPortFree(port: Int, maxWaitMs: Int): Boolean {
@@ -276,9 +302,30 @@ object SlipstreamBridge {
      * Synchronized to prevent double-stop race condition (onDestroy + coroutine cleanup).
      */
     @Synchronized
-    fun stopClient() {
+    fun stopClient(owner: String? = null) {
+        stopClientInternal(owner)
+    }
+
+    private fun stopClientInternal(owner: String? = null) {
         if (!isLibraryLoaded) return
-        if (!isNativeRunning()) return
+        val running = isNativeRunning()
+        val activeOwner = currentOwner
+        if (owner != null) {
+            if (activeOwner != null && activeOwner != owner) {
+                Log.d(TAG, "Skip stopping Slipstream client owned by $activeOwner (requested by $owner)")
+                return
+            }
+            if (activeOwner == null && running && owner != OWNER_VPN) {
+                Log.d(TAG, "Skip stopping Slipstream client with unknown owner (requested by $owner)")
+                return
+            }
+        }
+        if (!running) {
+            if (owner == null || activeOwner == null || activeOwner == owner) {
+                currentOwner = null
+            }
+            return
+        }
 
         val port = currentPort
         Log.i(TAG, "Stopping slipstream client on port $port")
@@ -293,6 +340,8 @@ object SlipstreamBridge {
             Log.i(TAG, "Slipstream client stopped (port $port free: ${port <= 0 || !isPortInUse(port)})")
         } catch (e: Exception) {
             Log.e(TAG, "Error stopping slipstream client", e)
+        } finally {
+            currentOwner = null
         }
     }
 
@@ -384,6 +433,15 @@ object SlipstreamBridge {
      * Check if the native client reports it's running (alias for isClientRunning).
      */
     fun isNativeRunning(): Boolean = isClientRunning()
+
+    /**
+     * Probe/scanner mode may reuse its own Slipstream instance, but must not
+     * interrupt an active VPN-owned client.
+     */
+    fun canStartProbeClient(): Boolean {
+        if (!isLibraryLoaded) return false
+        return !isNativeRunning() || currentOwner == OWNER_PROBE
+    }
 
     /**
      * Check if the QUIC connection is established and ready for streams.

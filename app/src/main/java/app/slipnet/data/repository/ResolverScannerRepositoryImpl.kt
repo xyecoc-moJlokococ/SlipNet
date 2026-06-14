@@ -1559,6 +1559,13 @@ class ResolverScannerRepositoryImpl @Inject constructor(
             val result = withTimeoutOrNull(timeoutMs) {
                 // Phase 1: Start tunnel
                 onPhaseUpdate("Starting tunnel...")
+                if (!SlipstreamBridge.canStartProbeClient()) {
+                    return@withTimeoutOrNull E2eTestResult(
+                        totalMs = SystemClock.elapsedRealtime() - totalStart,
+                        errorMessage = "Slipstream is busy with active VPN",
+                        phase = E2eTestPhase.TUNNEL_SETUP
+                    )
+                }
                 SlipstreamBridge.proxyOnlyMode = true
 
                 val resolver = ResolverConfig(
@@ -1578,7 +1585,8 @@ class ResolverScannerRepositoryImpl @Inject constructor(
                         "tcp"
                     } else {
                         "udp"
-                    }
+                    },
+                    owner = SlipstreamBridge.OWNER_PROBE
                 )
 
                 if (startResult.isFailure) {
@@ -1689,7 +1697,7 @@ class ResolverScannerRepositoryImpl @Inject constructor(
             )
         } finally {
             try {
-                SlipstreamBridge.stopClient()
+                SlipstreamBridge.stopClient(SlipstreamBridge.OWNER_PROBE)
             } catch (_: Exception) {}
             SlipstreamBridge.proxyOnlyMode = false
         }

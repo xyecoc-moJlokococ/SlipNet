@@ -3295,7 +3295,7 @@ class DnsScannerViewModel @Inject constructor(
             try {
                 when (profile.tunnelType) {
                     TunnelType.SLIPSTREAM, TunnelType.SLIPSTREAM_SSH -> {
-                        SlipstreamBridge.stopClient()
+                        SlipstreamBridge.stopClient(SlipstreamBridge.OWNER_PROBE)
                         SlipstreamBridge.proxyOnlyMode = false
                     }
                     TunnelType.DNSTT, TunnelType.DNSTT_SSH,
@@ -3420,7 +3420,7 @@ class DnsScannerViewModel @Inject constructor(
                     try {
                         when (tunnelType) {
                             TunnelType.SLIPSTREAM, TunnelType.SLIPSTREAM_SSH -> {
-                                SlipstreamBridge.stopClient()
+                                SlipstreamBridge.stopClient(SlipstreamBridge.OWNER_PROBE)
                                 SlipstreamBridge.proxyOnlyMode = false
                             }
                             TunnelType.DNSTT, TunnelType.DNSTT_SSH,

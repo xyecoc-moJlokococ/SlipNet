@@ -1,9 +1,7 @@
 [submodule "app/src/main/rust/slipstream-rust"]
 	path = app/src/main/rust/slipstream-rust
-	url = https://github.com/anonvector/slipstream-rust.git
-[submodule "app/src/main/rust/slipstream-rust-plus"]
-	path = app/src/main/rust/slipstream-rust-plus
-	url = https://github.com/Fox-Fig/slipstream-rust-plus
+	url = https://github.com/xyecoc-moJlokococ/slipstream-rust.git
+	branch = feature/dns-tcp-carrier
 [submodule "dnstt"]
 	path = dnstt
 	url = https://github.com/anonvector/dnstt.git

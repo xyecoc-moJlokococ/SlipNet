@@ -80,6 +80,7 @@ object SlipstreamBridge {
      * @param gsoEnabled Enable Generic Segmentation Offload
      * @param debugPoll Enable debug logging for DNS polling
      * @param debugStreams Enable debug logging for streams
+     * @param resolverTransport DNS resolver carrier: "udp" or "tcp"
      */
     fun startClient(
         domain: String,
@@ -92,7 +93,8 @@ object SlipstreamBridge {
         debugPoll: Boolean = false,
         debugStreams: Boolean = false,
         idlePollIntervalMs: Int = 10000,
-        idleTimeoutMs: Int = 120000
+        idleTimeoutMs: Int = 120000,
+        resolverTransport: String = "udp"
     ): Result<Unit> {
         if (!isLibraryLoaded) {
             return Result.failure(IllegalStateException("Native library not loaded"))
@@ -127,7 +129,12 @@ object SlipstreamBridge {
         }
 
         return try {
-            Log.i(TAG, "Starting slipstream client on $tcpListenHost:$actualPort, domain=$domain")
+            val nativeResolverTransport =
+                if (resolverTransport.equals("tcp", ignoreCase = true)) "tcp" else "udp"
+            Log.i(
+                TAG,
+                "Starting slipstream client on $tcpListenHost:$actualPort, domain=$domain, resolverTransport=$nativeResolverTransport"
+            )
             currentPort = actualPort
 
             val result = nativeStartSlipstreamClient(
@@ -143,7 +150,8 @@ object SlipstreamBridge {
                 debugPoll = debugPoll,
                 debugStreams = debugStreams,
                 idlePollInterval = idlePollIntervalMs,
-                idleTimeoutMs = idleTimeoutMs
+                idleTimeoutMs = idleTimeoutMs,
+                resolverTransport = nativeResolverTransport
             )
 
             when (result) {
@@ -167,7 +175,7 @@ object SlipstreamBridge {
                         retryOnAlternatePort(
                             tcpListenPort, actualPort, domain, resolvers, congestionControl,
                             keepAliveInterval, tcpListenHost, gsoEnabled, debugPoll, debugStreams,
-                            idlePollIntervalMs, idleTimeoutMs
+                            idlePollIntervalMs, idleTimeoutMs, nativeResolverTransport
                         )
                     } else {
                         val detail = nativeError ?: "unknown startup error"
@@ -198,7 +206,8 @@ object SlipstreamBridge {
         debugPoll: Boolean,
         debugStreams: Boolean,
         idlePollIntervalMs: Int,
-        idleTimeoutMs: Int
+        idleTimeoutMs: Int,
+        resolverTransport: String
     ): Result<Unit> {
         for (offset in 10..50 step 10) {
             val alt = basePort + offset
@@ -220,7 +229,8 @@ object SlipstreamBridge {
                 debugPoll = debugPoll,
                 debugStreams = debugStreams,
                 idlePollInterval = idlePollIntervalMs,
-                idleTimeoutMs = idleTimeoutMs
+                idleTimeoutMs = idleTimeoutMs,
+                resolverTransport = resolverTransport
             )
 
             if (result == 0) {
@@ -350,7 +360,8 @@ object SlipstreamBridge {
         debugPoll: Boolean,
         debugStreams: Boolean,
         idlePollInterval: Int,
-        idleTimeoutMs: Int
+        idleTimeoutMs: Int,
+        resolverTransport: String
     ): Int
 
     private external fun nativeStopSlipstreamClient()

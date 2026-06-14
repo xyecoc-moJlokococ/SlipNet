@@ -1172,7 +1172,8 @@ class VpnRepositoryImpl @Inject constructor(
             debugPoll = debugLogging,
             debugStreams = debugLogging,
             idlePollIntervalMs = 10000,
-            idleTimeoutMs = 120000
+            idleTimeoutMs = 120000,
+            resolverTransport = slipstreamResolverTransport(profile)
         )
         if (result.isFailure) {
             val exception = result.exceptionOrNull()
@@ -1181,6 +1182,9 @@ class VpnRepositoryImpl @Inject constructor(
         }
         return result.isSuccess
     }
+
+    private fun slipstreamResolverTransport(profile: ServerProfile): String =
+        if (profile.dnsTransport == DnsTransport.TCP) "tcp" else "udp"
 
     override suspend fun disconnect(): Result<Unit> {
         if (_connectionState.value is ConnectionState.Disconnected) {

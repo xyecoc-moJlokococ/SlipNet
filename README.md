@@ -583,6 +583,6 @@ This project is **not authorized** for distribution on any application store, ma
 
 ## Acknowledgments
 
-- [slipstream-rust](https://github.com/Mygod/slipstream-rust) - Rust QUIC tunneling library
+- [slipstream-rust](https://github.com/xyecoc-moJlokococ/slipstream-rust) - Rust QUIC tunneling library
 - [Stream-Gate](https://github.com/free-mba/Stream-Gate) - DNS tunnel scanning method
 - [VayDNS](https://github.com/net2share/vaydns) - Optimized DNS tunnel with configurable wire format

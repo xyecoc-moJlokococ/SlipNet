@@ -1573,7 +1573,12 @@ class ResolverScannerRepositoryImpl @Inject constructor(
                     congestionControl = profile.congestionControl.value,
                     keepAliveInterval = profile.keepAliveInterval,
                     tcpListenPort = tunnelPort,
-                    tcpListenHost = "127.0.0.1"
+                    tcpListenHost = "127.0.0.1",
+                    resolverTransport = if (profile.dnsTransport == DnsTransport.TCP) {
+                        "tcp"
+                    } else {
+                        "udp"
+                    }
                 )
 
                 if (startResult.isFailure) {

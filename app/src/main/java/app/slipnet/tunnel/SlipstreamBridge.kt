@@ -63,8 +63,19 @@ object SlipstreamBridge {
             return false
         }
         val result = service.protect(fd)
-        Log.d(TAG, "Protected socket fd=$fd, result=$result")
-        return result
+        if (result) {
+            Log.d(TAG, "Protected socket fd=$fd")
+            return true
+        }
+
+        // Slipstream is intentionally started before Builder.establish() so QUIC
+        // can come up before app traffic is routed into the TUN interface. On
+        // some Android builds VpnService.protect(fd) returns false until the VPN
+        // interface exists. That is still safe here because SlipNet excludes its
+        // own package from the VPN with addDisallowedApplication() when the
+        // interface is established.
+        Log.w(TAG, "VpnService.protect($fd) returned false; continuing because SlipNet self-excludes from VPN")
+        return true
     }
 
     /**

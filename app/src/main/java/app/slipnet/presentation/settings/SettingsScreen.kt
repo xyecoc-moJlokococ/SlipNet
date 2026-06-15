@@ -304,9 +304,12 @@ fun SettingsScreen(
 
                 ClickableSettingItem(
                     icon = Icons.Default.BatteryAlert,
-                    title = "Battery optimization",
-                    description = if (isBatteryOptimized) "Not exempted — VPN may disconnect in background"
-                                  else "Exempted — VPN will run reliably in background",
+                    title = tx("Battery optimization", "Оптимизация батареи"),
+                    description = if (isBatteryOptimized) {
+                        tx("Not exempted - VPN may disconnect in background", "Не отключена - VPN может отключаться в фоне")
+                    } else {
+                        tx("Exempted - VPN will run reliably in background", "Отключена - VPN будет надежнее работать в фоне")
+                    },
                     onClick = {
                         if (isBatteryOptimized) {
                             try {
@@ -341,8 +344,7 @@ fun SettingsScreen(
 
             // Proxy Settings
             SettingsSection(
-                title = tx("Proxy Settings", "Настройки прокси"),
-                subtitle = tx("Changes apply on next connection", "Изменения применятся при следующем подключении")
+                title = tx("Proxy Settings", "Настройки прокси")
             ) {
                 AddressSettingItem(
                     value = uiState.proxyListenAddress,
@@ -467,7 +469,7 @@ fun SettingsScreen(
             // DNS Settings
             SettingsSection(
                 title = "DNS",
-                subtitle = "Changes apply on next connection"
+                subtitle = tx("Changes apply on next connection", "Изменения применятся при следующем подключении")
             ) {
                 // The override only actually applies when the toggle is on AND
                 // the IP list is non-empty (matches SlipNetVpnService's
@@ -479,11 +481,11 @@ fun SettingsScreen(
                 // Global resolver override
                 SwitchSettingItem(
                     icon = Icons.Default.AltRoute,
-                    title = "Global resolver override",
+                    title = tx("Global resolver override", "Принудительные резолверы"),
                     description = if (uiState.globalResolverEnabled) {
-                        uiState.globalResolverList.ifBlank { "No IPs set — tap Edit IPs below" }
+                        uiState.globalResolverList.ifBlank { tx("No IPs set - tap Edit IPs below", "IP не заданы - нажми «Изменить IP» ниже") }
                     } else {
-                        "Force a fixed resolver list across all profiles"
+                        tx("Force a fixed resolver list across all profiles", "Использовать один список резолверов для всех профилей")
                     },
                     checked = uiState.globalResolverEnabled,
                     onCheckedChange = { viewModel.setGlobalResolverEnabled(it) }
@@ -491,8 +493,8 @@ fun SettingsScreen(
                 if (uiState.globalResolverEnabled) {
                     IndentedSettingItem(
                         icon = Icons.Default.Edit,
-                        title = "Edit IPs",
-                        description = uiState.globalResolverList.ifBlank { "Tap to set resolver IPs" },
+                        title = tx("Edit IPs", "Изменить IP"),
+                        description = uiState.globalResolverList.ifBlank { tx("Tap to set resolver IPs", "Нажми, чтобы задать IP резолверов") },
                         onClick = { showGlobalResolverDialog = true }
                     )
                 }
@@ -500,8 +502,8 @@ fun SettingsScreen(
                 // DNS pool — muted when the override is actually active
                 SwitchSettingItem(
                     icon = Icons.Default.AutoAwesome,
-                    title = "DNS pool",
-                    description = "Auto-pick the fastest resolvers on each connect",
+                    title = tx("DNS pool", "DNS-пул"),
+                    description = tx("Auto-pick the fastest resolvers on each connect", "Автоматически выбирать самые быстрые резолверы при подключении"),
                     checked = uiState.dnsPoolEnabled,
                     onCheckedChange = { viewModel.setDnsPoolEnabled(it) },
                     inactive = overrideActive
@@ -509,18 +511,18 @@ fun SettingsScreen(
                 if (uiState.dnsPoolEnabled) {
                     IndentedSettingItem(
                         icon = Icons.Default.Edit,
-                        title = "Edit pool",
-                        description = "Tap to manage the candidate list",
+                        title = tx("Edit pool", "Изменить пул"),
+                        description = tx("Tap to manage the candidate list", "Нажми, чтобы изменить список кандидатов"),
                         onClick = { showDnsPoolDialog = true },
                         inactive = overrideActive
                     )
                     SwitchSettingItem(
                         icon = Icons.Default.VerifiedUser,
-                        title = "HTTP/SSH verification",
+                        title = tx("HTTP/SSH verification", "HTTP/SSH-проверка"),
                         description = if (uiState.dnsPoolFullVerification)
-                            "Verifies real traffic through tunnel — 18s timeout per resolver"
+                            tx("Verifies real traffic through tunnel - 18s timeout per resolver", "Проверяет реальный трафик через туннель - таймаут 18 с на резолвер")
                         else
-                            "Handshake-only — faster scan, 10s timeout per resolver",
+                            tx("Handshake-only - faster scan, 10s timeout per resolver", "Только handshake - быстрее, таймаут 10 с на резолвер"),
                         checked = uiState.dnsPoolFullVerification,
                         onCheckedChange = { viewModel.setDnsPoolFullVerification(it) },
                         inactive = overrideActive
@@ -530,20 +532,20 @@ fun SettingsScreen(
                 // Conflict notice — only when override is *actually* active
                 if (overrideActive && uiState.dnsPoolEnabled) {
                     InfoNoticeRow(
-                        text = "Override active — pool is ignored."
+                        text = tx("Override active - pool is ignored.", "Принудительные резолверы активны - пул игнорируется.")
                     )
                 }
 
                 // Remote DNS server (always shown — system-level fallback)
                 ClickableSettingItem(
                     icon = Icons.Default.Dns,
-                    title = "Remote DNS server",
+                    title = tx("Remote DNS server", "Удаленный DNS-сервер"),
                     description = if (uiState.remoteDnsMode == "custom") {
                         val primary = uiState.customRemoteDns.ifBlank { "8.8.8.8" }
                         val fallback = uiState.customRemoteDnsFallback.ifBlank { "1.1.1.1" }
-                        "Custom ($primary, $fallback)"
+                        tx("Custom ($primary, $fallback)", "Свой ($primary, $fallback)")
                     } else {
-                        "Default (8.8.8.8, 1.1.1.1)"
+                        tx("Default (8.8.8.8, 1.1.1.1)", "По умолчанию (8.8.8.8, 1.1.1.1)")
                     },
                     onClick = { showRemoteDnsDialog = true }
                 )
@@ -552,24 +554,21 @@ fun SettingsScreen(
 
                 ClickableSettingItem(
                     icon = Icons.Default.Hub,
-                    title = "DNS workers",
-                    description = buildString {
-                        append("${uiState.dnsWorkerMode.displayName} (DNSTT/Slipstream, SSH always uses 5)")
-                        if (uiState.dnsWorkerMode.poolSize >= 3) append(" — may increase data usage")
-                    },
+                    title = tx("DNS workers", "DNS-воркеры"),
+                    description = dnsWorkerDescription(uiState.dnsWorkerMode),
                     onClick = { showDnsWorkerDialog = true }
                 )
             }
 
             // Network Settings
             SettingsSection(
-                title = "Network",
-                subtitle = "Changes apply on next connection"
+                title = tx("Network", "Сеть"),
+                subtitle = tx("Changes apply on next connection", "Изменения применятся при следующем подключении")
             ) {
                 SwitchSettingItem(
                     icon = Icons.Default.Block,
-                    title = "Disable QUIC",
-                    description = "Block QUIC protocol to force TCP (faster page loads over tunnels)",
+                    title = tx("Disable QUIC", "Отключить QUIC"),
+                    description = tx("Block QUIC protocol to force TCP (faster page loads over tunnels)", "Блокировать QUIC, чтобы принудить TCP (страницы быстрее грузятся через туннели)"),
                     checked = uiState.disableQuic,
                     onCheckedChange = { viewModel.setDisableQuic(it) }
                 )
@@ -578,21 +577,26 @@ fun SettingsScreen(
 
                 ClickableSettingItem(
                     icon = Icons.Default.SettingsEthernet,
-                    title = "VPN MTU",
-                    description = "VPN packet size: ${uiState.vpnMtu}. Lower values improve compatibility on mobile networks.",
+                    title = tx("VPN MTU", "VPN MTU"),
+                    description = tx(
+                        "VPN packet size: ${uiState.vpnMtu}. Lower values improve compatibility on mobile networks.",
+                        "Размер VPN-пакета: ${uiState.vpnMtu}. Меньшие значения улучшают совместимость с мобильными сетями."
+                    ),
                     onClick = { showMtuDialog = true }
                 )
 
                 SettingsDivider()
 
+                val bandwidthUnlimitedLabel = tx("Unlimited", "Без лимита")
+                val bandwidthUploadLabel = if (uiState.uploadLimitKbps > 0) "${uiState.uploadLimitKbps} KB/s" else bandwidthUnlimitedLabel
+                val bandwidthDownloadLabel = if (uiState.downloadLimitKbps > 0) "${uiState.downloadLimitKbps} KB/s" else bandwidthUnlimitedLabel
                 ClickableSettingItem(
                     icon = Icons.Default.Speed,
-                    title = "Bandwidth Limit",
-                    description = run {
-                        val ul = if (uiState.uploadLimitKbps > 0) "${uiState.uploadLimitKbps} KB/s" else "Unlimited"
-                        val dl = if (uiState.downloadLimitKbps > 0) "${uiState.downloadLimitKbps} KB/s" else "Unlimited"
-                        "Upload: $ul / Download: $dl"
-                    },
+                    title = tx("Bandwidth Limit", "Ограничение скорости"),
+                    description = tx(
+                        "Upload: $bandwidthUploadLabel / Download: $bandwidthDownloadLabel",
+                        "Исходящая: $bandwidthUploadLabel / входящая: $bandwidthDownloadLabel"
+                    ),
                     onClick = { showBandwidthLimitDialog = true }
                 )
 
@@ -600,15 +604,18 @@ fun SettingsScreen(
 
                 SwitchSettingItem(
                     icon = Icons.Default.Lan,
-                    title = "Append HTTP Proxy to VPN",
-                    description = "Route app traffic through HTTP proxy directly, bypassing TUN for better speeds (Android 10+)",
+                    title = tx("Append HTTP Proxy to VPN", "Добавить HTTP-прокси в VPN"),
+                    description = tx("Route app traffic through HTTP proxy directly, bypassing TUN for better speeds (Android 10+)", "Пускать трафик приложений напрямую через HTTP-прокси, минуя TUN для лучшей скорости (Android 10+)"),
                     checked = uiState.appendHttpProxyToVpn,
                     onCheckedChange = { viewModel.setAppendHttpProxyToVpn(it) }
                 )
 
                 if (uiState.appendHttpProxyToVpn && !uiState.httpProxyEnabled) {
                     Text(
-                        text = "To also share the HTTP proxy with other devices, enable \"HTTP proxy\" in Proxy Settings above.",
+                        text = tx(
+                            "To also share the HTTP proxy with other devices, enable \"HTTP proxy\" in Proxy Settings above.",
+                            "Чтобы раздавать HTTP-прокси другим устройствам, включи «HTTP-прокси» в настройках прокси выше."
+                        ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(start = 56.dp, end = 16.dp, bottom = 8.dp)
@@ -618,13 +625,13 @@ fun SettingsScreen(
 
             // Split Tunneling Settings
             SettingsSection(
-                title = "Split Tunneling",
-                subtitle = "Changes apply on next connection"
+                title = tx("Split Tunneling", "Раздельное туннелирование"),
+                subtitle = tx("Changes apply on next connection", "Изменения применятся при следующем подключении")
             ) {
                 SwitchSettingItem(
                     icon = Icons.Default.CallSplit,
-                    title = "Enable split tunneling",
-                    description = "Choose which apps use the VPN",
+                    title = tx("Enable split tunneling", "Включить раздельное туннелирование"),
+                    description = tx("Choose which apps use the VPN", "Выбрать, какие приложения используют VPN"),
                     checked = uiState.splitTunnelingEnabled,
                     onCheckedChange = { viewModel.setSplitTunnelingEnabled(it) }
                 )
@@ -634,10 +641,10 @@ fun SettingsScreen(
 
                     ClickableSettingItem(
                         icon = Icons.Default.FilterList,
-                        title = "Mode",
+                        title = tx("Mode", "Режим"),
                         description = when (uiState.splitTunnelingMode) {
-                            SplitTunnelingMode.DISALLOW -> "Selected apps bypass VPN"
-                            SplitTunnelingMode.ALLOW -> "Only selected apps use VPN"
+                            SplitTunnelingMode.DISALLOW -> tx("Selected apps bypass VPN", "Выбранные приложения обходят VPN")
+                            SplitTunnelingMode.ALLOW -> tx("Only selected apps use VPN", "Только выбранные приложения используют VPN")
                         },
                         onClick = { showSplitModeDialog = true }
                     )
@@ -646,8 +653,11 @@ fun SettingsScreen(
 
                     ClickableSettingItem(
                         icon = Icons.Default.Apps,
-                        title = "Select apps",
-                        description = "${uiState.splitTunnelingApps.size} apps selected",
+                        title = tx("Select apps", "Выбрать приложения"),
+                        description = tx(
+                            "${uiState.splitTunnelingApps.size} apps selected",
+                            "Выбрано приложений: ${uiState.splitTunnelingApps.size}"
+                        ),
                         onClick = onNavigateToAppSelector
                     )
                 }
@@ -655,13 +665,13 @@ fun SettingsScreen(
 
             // Domain Routing Settings
             SettingsSection(
-                title = "Domain Routing",
-                subtitle = "Changes apply on next connection"
+                title = tx("Domain Routing", "Маршрутизация доменов"),
+                subtitle = tx("Changes apply on next connection", "Изменения применятся при следующем подключении")
             ) {
                 SwitchSettingItem(
                     icon = Icons.Default.Language,
-                    title = "Enable domain routing",
-                    description = "Route specific domains through or around the VPN",
+                    title = tx("Enable domain routing", "Включить маршрутизацию доменов"),
+                    description = tx("Route specific domains through or around the VPN", "Пускать отдельные домены через VPN или в обход"),
                     checked = uiState.domainRoutingEnabled,
                     onCheckedChange = { viewModel.setDomainRoutingEnabled(it) }
                 )
@@ -671,10 +681,10 @@ fun SettingsScreen(
 
                     ClickableSettingItem(
                         icon = Icons.Default.FilterList,
-                        title = "Routing mode",
+                        title = tx("Routing mode", "Режим маршрутизации"),
                         description = when (uiState.domainRoutingMode) {
-                            DomainRoutingMode.BYPASS -> "Listed domains bypass VPN"
-                            DomainRoutingMode.ONLY_VPN -> "Only listed domains use VPN"
+                            DomainRoutingMode.BYPASS -> tx("Listed domains bypass VPN", "Домены из списка обходят VPN")
+                            DomainRoutingMode.ONLY_VPN -> tx("Only listed domains use VPN", "Только домены из списка используют VPN")
                         },
                         onClick = { showDomainRoutingModeDialog = true }
                     )
@@ -683,8 +693,11 @@ fun SettingsScreen(
 
                     ClickableSettingItem(
                         icon = Icons.Default.TravelExplore,
-                        title = "Manage domains",
-                        description = "${uiState.domainRoutingDomains.size} domains configured",
+                        title = tx("Manage domains", "Управление доменами"),
+                        description = tx(
+                            "${uiState.domainRoutingDomains.size} domains configured",
+                            "Доменов настроено: ${uiState.domainRoutingDomains.size}"
+                        ),
                         onClick = { showDomainManagementDialog = true }
                     )
                 }
@@ -692,13 +705,13 @@ fun SettingsScreen(
 
             // Geo-Bypass Settings
             SettingsSection(
-                title = "Geo-Bypass",
-                subtitle = "Changes apply on next connection"
+                title = tx("Geo-Bypass", "Гео-обход"),
+                subtitle = tx("Changes apply on next connection", "Изменения применятся при следующем подключении")
             ) {
                 SwitchSettingItem(
                     icon = Icons.Default.Public,
-                    title = "Enable geo-bypass",
-                    description = "Route domestic traffic directly, bypass VPN for local sites",
+                    title = tx("Enable geo-bypass", "Включить гео-обход"),
+                    description = tx("Route domestic traffic directly, bypass VPN for local sites", "Пускать локальный трафик напрямую, обходя VPN для местных сайтов"),
                     checked = uiState.geoBypassEnabled,
                     onCheckedChange = { viewModel.setGeoBypassEnabled(it) }
                 )
@@ -708,8 +721,8 @@ fun SettingsScreen(
 
                     ClickableSettingItem(
                         icon = Icons.Default.Language,
-                        title = "Country",
-                        description = uiState.geoBypassCountry.displayName,
+                        title = tx("Country", "Страна"),
+                        description = geoBypassCountryLabel(uiState.geoBypassCountry),
                         onClick = { showGeoBypassCountryDialog = true }
                     )
                 }
@@ -717,18 +730,13 @@ fun SettingsScreen(
 
             // SSH Tunnel Settings
             SettingsSection(
-                title = "SSH Tunnel",
-                subtitle = "Changes apply on next connection"
+                title = tx("SSH Tunnel", "SSH-туннель"),
+                subtitle = tx("Changes apply on next connection", "Изменения применятся при следующем подключении")
             ) {
                 ClickableSettingItem(
                     icon = Icons.Default.Lock,
-                    title = "Cipher",
-                    description = when (uiState.sshCipher) {
-                        SshCipher.AUTO -> "Auto (Fastest)"
-                        SshCipher.AES_128_GCM -> "AES-128-GCM"
-                        SshCipher.CHACHA20 -> "ChaCha20-Poly1305"
-                        SshCipher.AES_128_CTR -> "AES-128-CTR (Legacy)"
-                    },
+                    title = tx("Cipher", "Шифр"),
+                    description = sshCipherLabel(uiState.sshCipher),
                     onClick = { showSshCipherDialog = true }
                 )
 
@@ -736,8 +744,8 @@ fun SettingsScreen(
 
                 SwitchSettingItem(
                     icon = Icons.Default.Compress,
-                    title = "Compression",
-                    description = "Compress data through SSH (helps on slow links, hurts with HTTPS)",
+                    title = tx("Compression", "Сжатие"),
+                    description = tx("Compress data through SSH (helps on slow links, hurts with HTTPS)", "Сжимать данные через SSH (помогает на медленных каналах, мешает HTTPS)"),
                     checked = uiState.sshCompression,
                     onCheckedChange = { viewModel.setSshCompression(it) }
                 )
@@ -746,10 +754,10 @@ fun SettingsScreen(
 
                 SliderSettingItem(
                     icon = Icons.Default.Hub,
-                    title = "Max Channels",
+                    title = tx("Max Channels", "Макс. каналов"),
                     subtitle = when {
-                        !uiState.sshMaxChannelsIsCustom -> "Auto (adapts per tunnel type)"
-                        uiState.sshMaxChannels > 12 -> "High values may cause instability on DNS tunnels"
+                        !uiState.sshMaxChannelsIsCustom -> tx("Auto (adapts per tunnel type)", "Авто (подстраивается под тип туннеля)")
+                        uiState.sshMaxChannels > 12 -> tx("High values may cause instability on DNS tunnels", "Высокие значения могут быть нестабильны на DNS-туннелях")
                         else -> null
                     },
                     subtitleColor = if (uiState.sshMaxChannelsIsCustom && uiState.sshMaxChannels > 12) Color(0xFFFF9800) else null,
@@ -765,11 +773,11 @@ fun SettingsScreen(
 
                 SwitchSettingItem(
                     icon = Icons.Default.Shield,
-                    title = "Prevent DNS Fallback",
+                    title = tx("Prevent DNS Fallback", "Запретить DNS fallback"),
                     description = if (uiState.preventDnsFallback)
-                        "DNS queries fail if SSH tunnel is down (no leak)"
+                        tx("DNS queries fail if SSH tunnel is down (no leak)", "DNS-запросы падают, если SSH-туннель недоступен (без утечки)")
                     else
-                        "Falls back to direct DNS if SSH fails (may expose queries)",
+                        tx("Falls back to direct DNS if SSH fails (may expose queries)", "При сбое SSH используется прямой DNS (запросы могут раскрыться)"),
                     checked = uiState.preventDnsFallback,
                     onCheckedChange = { viewModel.setPreventDnsFallback(it) }
                 )
@@ -890,17 +898,17 @@ fun SettingsScreen(
     // Dark Mode Dialog
     if (showMtuDialog) {
         val mtuPresets = listOf(
-            1500 to "Best throughput on clean networks",
-            1400 to "Recommended for most mobile networks",
-            1350 to "Conservative, for double-NAT or PPPoE",
-            1280 to "Maximum compatibility"
+            1500 to tx("Best throughput on clean networks", "Лучшая скорость на чистых сетях"),
+            1400 to tx("Recommended for most mobile networks", "Рекомендуется для большинства мобильных сетей"),
+            1350 to tx("Conservative, for double-NAT or PPPoE", "Осторожный вариант для double-NAT или PPPoE"),
+            1280 to tx("Maximum compatibility", "Максимальная совместимость")
         )
         val isCustom = mtuPresets.none { it.first == uiState.vpnMtu }
         var customMtuText by remember { mutableStateOf(if (isCustom) uiState.vpnMtu.toString() else "") }
         var useCustom by remember { mutableStateOf(isCustom) }
         AlertDialog(
             onDismissRequest = { showMtuDialog = false },
-            title = { Text("VPN MTU") },
+            title = { Text(tx("VPN MTU", "VPN MTU")) },
             text = {
                 Column {
                     mtuPresets.forEach { (mtu, desc) ->
@@ -950,8 +958,8 @@ fun SettingsScreen(
                             value = customMtuText,
                             onValueChange = { customMtuText = it.filter { c -> c.isDigit() }.take(5) },
                             enabled = useCustom,
-                            label = { Text("Custom") },
-                            placeholder = { Text("512–1500") },
+                            label = { Text(tx("Custom", "Свой")) },
+                            placeholder = { Text("512-1500") },
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             singleLine = true,
                             modifier = Modifier
@@ -972,13 +980,13 @@ fun SettingsScreen(
                             }
                         }
                     ) {
-                        Text("Apply")
+                        Text(tx("Apply", "Применить"))
                     }
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showMtuDialog = false }) {
-                    Text("Cancel")
+                    Text(tx("Cancel", "Отмена"))
                 }
             }
         )
@@ -1000,11 +1008,14 @@ fun SettingsScreen(
     if (showDnsWorkerDialog) {
         AlertDialog(
             onDismissRequest = { showDnsWorkerDialog = false },
-            title = { Text("DNS Workers") },
+            title = { Text(tx("DNS Workers", "DNS-воркеры")) },
             text = {
                 Column {
                     Text(
-                        text = "Controls how DNS is resolved through the tunnel. Fewer workers = more stable on restricted networks. Per-query creates a fresh connection for each DNS lookup.",
+                        text = tx(
+                            "Controls how DNS is resolved through the tunnel. Fewer workers = more stable on restricted networks. Per-query creates a fresh connection for each DNS lookup.",
+                            "Управляет тем, как DNS проходит через туннель. Меньше воркеров - стабильнее на ограниченных сетях. Per-query создает новое соединение для каждого DNS-запроса."
+                        ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(bottom = 12.dp)
@@ -1029,14 +1040,17 @@ fun SettingsScreen(
                                 }
                             )
                             Text(
-                                text = mode.displayName,
+                                text = dnsWorkerModeLabel(mode),
                                 modifier = Modifier.padding(start = 8.dp)
                             )
                         }
                     }
                     if (uiState.dnsWorkerMode.poolSize >= 3) {
                         Text(
-                            text = "Higher worker counts increase background data usage due to keepalive traffic on each connection. Use 2 or per-query if data usage is a concern.",
+                            text = tx(
+                                "Higher worker counts increase background data usage due to keepalive traffic on each connection. Use 2 or per-query if data usage is a concern.",
+                                "Большое число воркеров увеличивает фоновый расход трафика из-за keepalive на каждом соединении. Если трафик важен, используй 2 или per-query."
+                            ),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.error,
                             modifier = Modifier.padding(top = 8.dp)
@@ -1046,7 +1060,7 @@ fun SettingsScreen(
             },
             confirmButton = {
                 TextButton(onClick = { showDnsWorkerDialog = false }) {
-                    Text("Cancel")
+                    Text(tx("Cancel", "Отмена"))
                 }
             }
         )
@@ -1102,7 +1116,7 @@ fun SettingsScreen(
     if (showSplitModeDialog) {
         AlertDialog(
             onDismissRequest = { showSplitModeDialog = false },
-            title = { Text("Split Tunneling Mode") },
+            title = { Text(tx("Split Tunneling Mode", "Режим раздельного туннелирования")) },
             text = {
                 Column {
                     SplitTunnelingMode.entries.forEach { mode ->
@@ -1127,14 +1141,14 @@ fun SettingsScreen(
                             Column(modifier = Modifier.padding(start = 8.dp)) {
                                 Text(
                                     text = when (mode) {
-                                        SplitTunnelingMode.DISALLOW -> "Bypass"
-                                        SplitTunnelingMode.ALLOW -> "Only"
+                                        SplitTunnelingMode.DISALLOW -> tx("Bypass", "В обход")
+                                        SplitTunnelingMode.ALLOW -> tx("Only", "Только")
                                     }
                                 )
                                 Text(
                                     text = when (mode) {
-                                        SplitTunnelingMode.DISALLOW -> "Selected apps bypass VPN"
-                                        SplitTunnelingMode.ALLOW -> "Only selected apps use VPN"
+                                        SplitTunnelingMode.DISALLOW -> tx("Selected apps bypass VPN", "Выбранные приложения обходят VPN")
+                                        SplitTunnelingMode.ALLOW -> tx("Only selected apps use VPN", "Только выбранные приложения используют VPN")
                                     },
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -1146,7 +1160,7 @@ fun SettingsScreen(
             },
             confirmButton = {
                 TextButton(onClick = { showSplitModeDialog = false }) {
-                    Text("Cancel")
+                    Text(tx("Cancel", "Отмена"))
                 }
             }
         )
@@ -1156,7 +1170,7 @@ fun SettingsScreen(
     if (showDomainRoutingModeDialog) {
         AlertDialog(
             onDismissRequest = { showDomainRoutingModeDialog = false },
-            title = { Text("Domain Routing Mode") },
+            title = { Text(tx("Domain Routing Mode", "Режим маршрутизации доменов")) },
             text = {
                 Column {
                     DomainRoutingMode.entries.forEach { mode ->
@@ -1181,14 +1195,14 @@ fun SettingsScreen(
                             Column(modifier = Modifier.padding(start = 8.dp)) {
                                 Text(
                                     text = when (mode) {
-                                        DomainRoutingMode.BYPASS -> "Bypass VPN"
-                                        DomainRoutingMode.ONLY_VPN -> "Only VPN"
+                                        DomainRoutingMode.BYPASS -> tx("Bypass VPN", "В обход VPN")
+                                        DomainRoutingMode.ONLY_VPN -> tx("Only VPN", "Только VPN")
                                     }
                                 )
                                 Text(
                                     text = when (mode) {
-                                        DomainRoutingMode.BYPASS -> "Listed domains connect directly"
-                                        DomainRoutingMode.ONLY_VPN -> "Only listed domains use the VPN"
+                                        DomainRoutingMode.BYPASS -> tx("Listed domains connect directly", "Домены из списка подключаются напрямую")
+                                        DomainRoutingMode.ONLY_VPN -> tx("Only listed domains use the VPN", "Только домены из списка используют VPN")
                                     },
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -1200,7 +1214,7 @@ fun SettingsScreen(
             },
             confirmButton = {
                 TextButton(onClick = { showDomainRoutingModeDialog = false }) {
-                    Text("Cancel")
+                    Text(tx("Cancel", "Отмена"))
                 }
             }
         )
@@ -1220,7 +1234,7 @@ fun SettingsScreen(
     if (showGeoBypassCountryDialog) {
         AlertDialog(
             onDismissRequest = { showGeoBypassCountryDialog = false },
-            title = { Text("Select Country") },
+            title = { Text(tx("Select Country", "Выбрать страну")) },
             text = {
                 Column {
                     GeoBypassCountry.entries.forEach { country ->
@@ -1243,7 +1257,7 @@ fun SettingsScreen(
                                 }
                             )
                             Text(
-                                text = country.displayName,
+                                text = geoBypassCountryLabel(country),
                                 modifier = Modifier.padding(start = 8.dp)
                             )
                         }
@@ -1252,7 +1266,7 @@ fun SettingsScreen(
             },
             confirmButton = {
                 TextButton(onClick = { showGeoBypassCountryDialog = false }) {
-                    Text("Cancel")
+                    Text(tx("Cancel", "Отмена"))
                 }
             }
         )
@@ -1269,11 +1283,14 @@ fun SettingsScreen(
         val hasInvalid = invalidEntries.isNotEmpty()
         AlertDialog(
             onDismissRequest = { showGlobalResolverDialog = false },
-            title = { Text("Global DNS Resolvers") },
+            title = { Text(tx("Global DNS Resolvers", "Глобальные DNS-резолверы")) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        "Enter DNS resolver IPs, one per line or comma-separated (max 10). These override the resolvers in all DNS tunnel profiles and are used to resolve SSH hostnames.",
+                        tx(
+                            "Enter DNS resolver IPs, one per line or comma-separated (max 10). These override the resolvers in all DNS tunnel profiles and are used to resolve SSH hostnames.",
+                            "Введи IP DNS-резолверов, по одному в строке или через запятую (до 10). Они заменяют резолверы во всех DNS-туннельных профилях и используются для SSH-хостов."
+                        ),
                         style = MaterialTheme.typography.bodySmall
                     )
                     OutlinedTextField(
@@ -1287,19 +1304,25 @@ fun SettingsScreen(
                     )
                     if (tooMany) {
                         Text(
-                            "Maximum 10 resolvers ($resolverCount entered)",
+                            tx(
+                                "Maximum 10 resolvers ($resolverCount entered)",
+                                "Максимум 10 резолверов (введено: $resolverCount)"
+                            ),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.error
                         )
                     } else if (hasInvalid) {
                         Text(
-                            "Invalid IP: ${invalidEntries.first()}",
+                            tx("Invalid IP: ${invalidEntries.first()}", "Некорректный IP: ${invalidEntries.first()}"),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.error
                         )
                     } else if (resolverCount > 0) {
                         Text(
-                            "$resolverCount resolver${if (resolverCount > 1) "s" else ""}",
+                            tx(
+                                "$resolverCount resolver${if (resolverCount > 1) "s" else ""}",
+                                "Резолверов: $resolverCount"
+                            ),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -1315,10 +1338,10 @@ fun SettingsScreen(
                         showGlobalResolverDialog = false
                     },
                     enabled = !tooMany && !hasInvalid && resolverCount > 0
-                ) { Text("Save") }
+                ) { Text(tx("Save", "Сохранить")) }
             },
             dismissButton = {
-                TextButton(onClick = { showGlobalResolverDialog = false }) { Text("Cancel") }
+                TextButton(onClick = { showGlobalResolverDialog = false }) { Text(tx("Cancel", "Отмена")) }
             }
         )
     }
@@ -1359,7 +1382,7 @@ fun SettingsScreen(
     if (showSshCipherDialog) {
         AlertDialog(
             onDismissRequest = { showSshCipherDialog = false },
-            title = { Text("SSH Cipher") },
+            title = { Text(tx("SSH Cipher", "SSH-шифр")) },
             text = {
                 Column {
                     SshCipher.entries.forEach { cipher ->
@@ -1382,7 +1405,7 @@ fun SettingsScreen(
                                 }
                             )
                             Text(
-                                text = cipher.displayName,
+                                text = sshCipherLabel(cipher),
                                 modifier = Modifier.padding(start = 8.dp)
                             )
                         }
@@ -1391,7 +1414,7 @@ fun SettingsScreen(
             },
             confirmButton = {
                 TextButton(onClick = { showSshCipherDialog = false }) {
-                    Text("Cancel")
+                    Text(tx("Cancel", "Отмена"))
                 }
             }
         )
@@ -1401,21 +1424,24 @@ fun SettingsScreen(
     if (showResetSettingsDialog) {
         AlertDialog(
             onDismissRequest = { showResetSettingsDialog = false },
-            title = { Text("Reset all settings?") },
+            title = { Text(tx("Reset all settings?", "Сбросить все настройки?")) },
             text = {
-                Text("This will restore all settings to their default values. Your profiles and connection stats will not be affected.")
+                Text(tx(
+                    "This will restore all settings to their default values. Your profiles and connection stats will not be affected.",
+                    "Это вернет настройки к значениям по умолчанию. Профили и статистика подключений не изменятся."
+                ))
             },
             confirmButton = {
                 TextButton(onClick = {
                     viewModel.resetAllSettings()
                     showResetSettingsDialog = false
                 }) {
-                    Text("Reset", color = MaterialTheme.colorScheme.error)
+                    Text(tx("Reset", "Сбросить"), color = MaterialTheme.colorScheme.error)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showResetSettingsDialog = false }) {
-                    Text("Cancel")
+                    Text(tx("Cancel", "Отмена"))
                 }
             }
         )
@@ -1426,7 +1452,7 @@ fun SettingsScreen(
         AlertDialog(
             onDismissRequest = { showAboutDialog = false },
             title = { Text(tx("About SlipNet", "О SlipNet")) },
-            text = { AboutDialogContent() },
+            text = { LiteAboutDialogContent() },
             confirmButton = {
                 TextButton(onClick = { showAboutDialog = false }) {
                     Text(tx("Close", "Закрыть"))
@@ -1435,6 +1461,84 @@ fun SettingsScreen(
         )
     }
 
+}
+
+@Composable
+private fun LiteAboutDialogContent() {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text(
+            text = tx(
+                "SlipNet Lite is a lightweight version with a smaller app size.",
+                "SlipNet Lite - облегченная версия с меньшим размером приложения."
+            ),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            text = tx("Included protocols:", "Доступные протоколы:"),
+            style = MaterialTheme.typography.labelLarge
+        )
+        listOf(
+            "Slipstream / Slipstream + SSH",
+            "DNSTT / DNSTT + SSH",
+            "VayDNS / VayDNS + SSH",
+            "SSH",
+            "DOH (DNS over HTTPS)",
+            "SOCKS5",
+            "VLESS"
+        ).forEach { protocol ->
+            Text(
+                text = "• $protocol",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+        AboutDialogContent()
+    }
+}
+
+@Composable
+private fun dnsWorkerDescription(mode: DnsWorkerMode): String {
+    return when (mode) {
+        DnsWorkerMode.PER_QUERY -> tx("Per-query (default) (DNSTT/Slipstream, SSH always uses 5)", "Per-query (по умолчанию) (DNSTT/Slipstream, SSH всегда использует 5)")
+        DnsWorkerMode.TWO -> tx("2 workers (more stable, lower background traffic)", "2 воркера (стабильнее, меньше фонового трафика)")
+        DnsWorkerMode.THREE -> tx("3 workers (balanced)", "3 воркера (баланс)")
+        DnsWorkerMode.FIVE -> tx("5 workers (fastest)", "5 воркеров (быстрее всего)")
+    }
+}
+
+@Composable
+private fun dnsWorkerModeLabel(mode: DnsWorkerMode): String {
+    return when (mode) {
+        DnsWorkerMode.PER_QUERY -> tx("Per-query (default)", "Per-query (по умолчанию)")
+        DnsWorkerMode.TWO -> tx("2 workers", "2 воркера")
+        DnsWorkerMode.THREE -> tx("3 workers", "3 воркера")
+        DnsWorkerMode.FIVE -> tx("5 workers (fastest)", "5 воркеров (быстрее всего)")
+    }
+}
+
+@Composable
+private fun sshCipherLabel(cipher: SshCipher): String {
+    return when (cipher) {
+        SshCipher.AUTO -> tx("Auto (Fastest)", "Авто (самый быстрый)")
+        SshCipher.AES_128_GCM -> "AES-128-GCM"
+        SshCipher.CHACHA20 -> "ChaCha20-Poly1305"
+        SshCipher.AES_128_CTR -> tx("AES-128-CTR (Legacy)", "AES-128-CTR (Legacy)")
+    }
+}
+
+@Composable
+private fun geoBypassCountryLabel(country: GeoBypassCountry): String {
+    return when (country) {
+        GeoBypassCountry.IR -> tx("Iran", "Иран")
+        GeoBypassCountry.CN -> tx("China", "Китай")
+        GeoBypassCountry.RU -> tx("Russia", "Россия")
+    }
 }
 
 @Composable
@@ -1457,7 +1561,7 @@ private fun DomainManagementDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Manage Domains") },
+        title = { Text(tx("Manage Domains", "Управление доменами")) },
         text = {
             Column(
                 modifier = Modifier.fillMaxWidth()
@@ -1478,7 +1582,7 @@ private fun DomainManagementDialog(
                         modifier = Modifier.weight(1f)
                     )
                     IconButton(onClick = { addDomain() }) {
-                        Icon(Icons.Default.Add, contentDescription = "Add domain")
+                        Icon(Icons.Default.Add, contentDescription = tx("Add domain", "Добавить домен"))
                     }
                 }
 
@@ -1486,7 +1590,7 @@ private fun DomainManagementDialog(
 
                 if (sortedDomains.isEmpty()) {
                     Text(
-                        text = "No domains configured",
+                        text = tx("No domains configured", "Домены не настроены"),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(vertical = 8.dp)
@@ -1515,7 +1619,7 @@ private fun DomainManagementDialog(
                                 ) {
                                     Icon(
                                         Icons.Default.Delete,
-                                        contentDescription = "Remove $domain",
+                                        contentDescription = tx("Remove $domain", "Удалить $domain"),
                                         tint = MaterialTheme.colorScheme.error,
                                         modifier = Modifier.size(18.dp)
                                     )
@@ -1528,7 +1632,7 @@ private fun DomainManagementDialog(
         },
         confirmButton = {
             TextButton(onClick = { addDomain(); onDismiss() }) {
-                Text("Done")
+                Text(tx("Done", "Готово"))
             }
         }
     )
@@ -1549,11 +1653,14 @@ private fun RemoteDnsDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Remote DNS Server") },
+        title = { Text(tx("Remote DNS Server", "Удаленный DNS-сервер")) },
         text = {
             Column {
                 Text(
-                    text = "DNS servers used on the remote side of the tunnel for resolving domain names.",
+                    text = tx(
+                        "DNS servers used on the remote side of the tunnel for resolving domain names.",
+                        "DNS-серверы на удаленной стороне туннеля для разрешения доменных имен."
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(bottom = 12.dp)
@@ -1573,9 +1680,9 @@ private fun RemoteDnsDialog(
                         onClick = { selectedMode = "default" }
                     )
                     Column(modifier = Modifier.padding(start = 8.dp)) {
-                        Text("Default (8.8.8.8, 1.1.1.1)")
+                        Text(tx("Default (8.8.8.8, 1.1.1.1)", "По умолчанию (8.8.8.8, 1.1.1.1)"))
                         Text(
-                            text = "Google primary, Cloudflare fallback",
+                            text = tx("Google primary, Cloudflare fallback", "Основной Google, резервный Cloudflare"),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -1596,7 +1703,7 @@ private fun RemoteDnsDialog(
                         onClick = { selectedMode = "custom" }
                     )
                     Text(
-                        text = "Custom",
+                        text = tx("Custom", "Свой"),
                         modifier = Modifier.padding(start = 8.dp)
                     )
                 }
@@ -1606,7 +1713,7 @@ private fun RemoteDnsDialog(
                         value = customDns,
                         onValueChange = { customDns = it },
                         placeholder = { Text("e.g., 9.9.9.9") },
-                        supportingText = { Text("Primary DNS server") },
+                        supportingText = { Text(tx("Primary DNS server", "Основной DNS-сервер")) },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         singleLine = true,
                         modifier = Modifier
@@ -1618,7 +1725,7 @@ private fun RemoteDnsDialog(
                         value = customDnsFallback,
                         onValueChange = { customDnsFallback = it },
                         placeholder = { Text("e.g., 8.8.8.8") },
-                        supportingText = { Text("Fallback DNS server") },
+                        supportingText = { Text(tx("Fallback DNS server", "Резервный DNS-сервер")) },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         singleLine = true,
                         modifier = Modifier
@@ -1643,7 +1750,7 @@ private fun RemoteDnsDialog(
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel")
+                Text(tx("Cancel", "Отмена"))
             }
         }
     )
@@ -1901,7 +2008,7 @@ private fun SliderSettingItem(
             }
             if (onReset != null) {
                 TextButton(onClick = onReset) {
-                    Text("Auto", style = MaterialTheme.typography.labelSmall)
+                    Text(tx("Auto", "Авто"), style = MaterialTheme.typography.labelSmall)
                 }
             }
             Text(
@@ -1972,7 +2079,7 @@ private fun StepperSettingItem(
             ) {
                 Icon(
                     Icons.Default.Remove,
-                    contentDescription = "Decrease",
+                    contentDescription = tx("Decrease", "Уменьшить"),
                     modifier = Modifier.size(20.dp)
                 )
             }
@@ -1990,7 +2097,7 @@ private fun StepperSettingItem(
             ) {
                 Icon(
                     Icons.Default.Add,
-                    contentDescription = "Increase",
+                    contentDescription = tx("Increase", "Увеличить"),
                     modifier = Modifier.size(20.dp)
                 )
             }
@@ -2369,19 +2476,22 @@ private fun BandwidthLimitDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Bandwidth Limit") },
+        title = { Text(tx("Bandwidth Limit", "Ограничение скорости")) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
-                    text = "Set speed limits in KB/s. Leave empty or 0 for unlimited. Applies on next connection.",
+                    text = tx(
+                        "Set speed limits in KB/s. Leave empty or 0 for unlimited. Applies on next connection.",
+                        "Задай лимиты скорости в KB/s. Оставь пустым или 0 для безлимита. Применится при следующем подключении."
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 OutlinedTextField(
                     value = uploadText,
                     onValueChange = { uploadText = it.filter { c -> c.isDigit() }.take(6) },
-                    label = { Text("Upload (KB/s)") },
-                    placeholder = { Text("Unlimited") },
+                    label = { Text(tx("Upload (KB/s)", "Исходящая (KB/s)")) },
+                    placeholder = { Text(tx("Unlimited", "Без лимита")) },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
@@ -2389,8 +2499,8 @@ private fun BandwidthLimitDialog(
                 OutlinedTextField(
                     value = downloadText,
                     onValueChange = { downloadText = it.filter { c -> c.isDigit() }.take(6) },
-                    label = { Text("Download (KB/s)") },
-                    placeholder = { Text("Unlimited") },
+                    label = { Text(tx("Download (KB/s)", "Входящая (KB/s)")) },
+                    placeholder = { Text(tx("Unlimited", "Без лимита")) },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
@@ -2405,12 +2515,12 @@ private fun BandwidthLimitDialog(
                     onApply(up.coerceAtLeast(0), down.coerceAtLeast(0))
                 }
             ) {
-                Text("Apply")
+                Text(tx("Apply", "Применить"))
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel")
+                Text(tx("Cancel", "Отмена"))
             }
         }
     )

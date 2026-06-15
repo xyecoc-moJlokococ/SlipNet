@@ -48,6 +48,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import app.slipnet.presentation.localization.tx
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -64,10 +65,10 @@ fun EditChainScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(if (uiState.isEditing) "Edit Chain" else "New Chain") },
+                title = { Text(if (uiState.isEditing) tx("Edit Chain", "Изменить цепочку") else tx("New Chain", "Новая цепочка")) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = tx("Back", "Назад"))
                     }
                 }
             )
@@ -82,7 +83,7 @@ fun EditChainScreen(
             OutlinedTextField(
                 value = uiState.name,
                 onValueChange = viewModel::setName,
-                label = { Text("Chain Name") },
+                label = { Text(tx("Chain Name", "Название цепочки")) },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true
             )
@@ -90,12 +91,15 @@ fun EditChainScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             Text(
-                "Layers",
+                tx("Layers", "Слои"),
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.Bold
             )
             Text(
-                "Top layer reaches the Internet. Bottom layer receives your apps.",
+                tx(
+                    "Top layer reaches the Internet. Bottom layer receives your apps.",
+                    "Верхний слой выходит в интернет. Нижний слой принимает трафик приложений."
+                ),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -140,12 +144,12 @@ fun EditChainScreen(
 
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = profile?.name ?: "Deleted profile",
+                                    text = profile?.name ?: tx("Deleted profile", "Удаленный профиль"),
                                     style = MaterialTheme.typography.bodyMedium,
                                     fontWeight = FontWeight.Medium
                                 )
                                 Text(
-                                    text = profile?.tunnelType?.displayName ?: "Unknown",
+                                    text = profile?.tunnelType?.displayName ?: tx("Unknown", "Неизвестно"),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -157,7 +161,7 @@ fun EditChainScreen(
                                     onClick = { viewModel.moveProfile(index, index - 1) },
                                     modifier = Modifier.size(32.dp)
                                 ) {
-                                    Icon(Icons.Default.KeyboardArrowUp, "Move up", modifier = Modifier.size(20.dp))
+                                    Icon(Icons.Default.KeyboardArrowUp, tx("Move up", "Выше"), modifier = Modifier.size(20.dp))
                                 }
                             }
                             if (index < uiState.selectedProfileIds.size - 1) {
@@ -165,14 +169,14 @@ fun EditChainScreen(
                                     onClick = { viewModel.moveProfile(index, index + 1) },
                                     modifier = Modifier.size(32.dp)
                                 ) {
-                                    Icon(Icons.Default.KeyboardArrowDown, "Move down", modifier = Modifier.size(20.dp))
+                                    Icon(Icons.Default.KeyboardArrowDown, tx("Move down", "Ниже"), modifier = Modifier.size(20.dp))
                                 }
                             }
                             IconButton(
                                 onClick = { viewModel.removeProfile(index) },
                                 modifier = Modifier.size(32.dp)
                             ) {
-                                Icon(Icons.Default.Delete, "Remove", modifier = Modifier.size(20.dp))
+                                Icon(Icons.Default.Delete, tx("Remove", "Удалить"), modifier = Modifier.size(20.dp))
                             }
                         }
                     }
@@ -192,7 +196,7 @@ fun EditChainScreen(
                     ) {
                         Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Add Layer")
+                        Text(tx("Add Layer", "Добавить слой"))
                     }
 
                     DropdownMenu(
@@ -239,7 +243,7 @@ fun EditChainScreen(
                     .padding(vertical = 16.dp),
                 enabled = uiState.selectedProfileIds.size >= 2 && uiState.name.isNotBlank() && uiState.validationError == null
             ) {
-                Text(if (uiState.isEditing) "Save Chain" else "Create Chain")
+                Text(if (uiState.isEditing) tx("Save Chain", "Сохранить цепочку") else tx("Create Chain", "Создать цепочку"))
             }
         }
     }

@@ -64,7 +64,6 @@ import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.FileDownload
-import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
@@ -136,7 +135,6 @@ import app.slipnet.domain.model.PingResult
 import app.slipnet.domain.model.ProfileChain
 import app.slipnet.domain.model.ServerProfile
 import app.slipnet.domain.model.TrafficStats
-import app.slipnet.presentation.common.components.AboutDialogContent
 import app.slipnet.presentation.common.components.ProfileListItem
 import app.slipnet.presentation.common.components.QrCodeDialog
 import app.slipnet.presentation.common.icons.VlessIcon
@@ -227,7 +225,6 @@ fun MainScreen(
     val hasChains = uiState.chains.isNotEmpty()
     var selectedTab by remember { mutableIntStateOf(0) }
     if (!hasChains && selectedTab == 1) selectedTab = 0
-    var showLiteInfoDialog by remember { mutableStateOf(false) }
 
     val vpnPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
@@ -441,15 +438,6 @@ fun MainScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
-                        if (BuildConfig.FLAVOR == "lite") {
-                            IconButton(onClick = { showLiteInfoDialog = true }) {
-                                Icon(
-                                    Icons.Default.Info,
-                                    contentDescription = "Lite version info",
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        }
                     }
                 },
                 actions = {
@@ -459,10 +447,10 @@ fun MainScreen(
                         }
                     }
                     IconButton(onClick = { showShareDialog = true }) {
-                        Icon(Icons.Default.Share, contentDescription = "Share App")
+                        Icon(Icons.Default.Share, contentDescription = tx("Share App", "Поделиться приложением"))
                     }
                     IconButton(onClick = onNavigateToSettings) {
-                        Icon(Icons.Default.Settings, contentDescription = "Settings")
+                        Icon(Icons.Default.Settings, contentDescription = tx("Settings", "Настройки"))
                     }
                     // Overflow menu (three-dot, rightmost)
                     Box {
@@ -475,7 +463,7 @@ fun MainScreen(
                         ) {
                             DropdownMenuItem(
                                 text = {
-                                    Text(if (uiState.isPingRunning) "Stop Real Ping" else "Real Ping")
+                                    Text(if (uiState.isPingRunning) tx("Stop Real Ping", "Остановить реальный ping") else tx("Real Ping", "Реальный ping"))
                                 },
                                 onClick = {
                                     showOverflowMenu = false
@@ -485,7 +473,7 @@ fun MainScreen(
                             )
                             DropdownMenuItem(
                                 text = {
-                                    Text(if (uiState.isPingRunning) "Stop Simple Ping" else "Simple Ping")
+                                    Text(if (uiState.isPingRunning) tx("Stop Simple Ping", "Остановить простой ping") else tx("Simple Ping", "Простой ping"))
                                 },
                                 onClick = {
                                     showOverflowMenu = false
@@ -495,7 +483,7 @@ fun MainScreen(
                             )
                             if (uiState.pingResults.isNotEmpty() && !uiState.isPingRunning) {
                                 DropdownMenuItem(
-                                    text = { Text("Clear Ping Results") },
+                                    text = { Text(tx("Clear Ping Results", "Очистить результаты ping")) },
                                     onClick = {
                                         showOverflowMenu = false
                                         viewModel.clearPingResults()
@@ -506,7 +494,7 @@ fun MainScreen(
                             // successful measurement — otherwise there's nothing to sort by.
                             if (uiState.pingResults.values.any { it is PingResult.Success }) {
                                 DropdownMenuItem(
-                                    text = { Text("Sort by Ping") },
+                                    text = { Text(tx("Sort by Ping", "Сортировать по ping")) },
                                     onClick = {
                                         showOverflowMenu = false
                                         viewModel.sortProfilesByPing()
@@ -514,7 +502,7 @@ fun MainScreen(
                                 )
                             }
                             DropdownMenuItem(
-                                text = { Text("Export All Profiles") },
+                                text = { Text(tx("Export All Profiles", "Экспортировать все профили")) },
                                 onClick = {
                                     showOverflowMenu = false
                                     viewModel.exportAllProfiles()
@@ -522,7 +510,7 @@ fun MainScreen(
                                 enabled = uiState.profiles.isNotEmpty()
                             )
                             DropdownMenuItem(
-                                text = { Text("Export All (Encrypted)") },
+                                text = { Text(tx("Export All (Encrypted)", "Экспортировать все (зашифровано)")) },
                                 onClick = {
                                     showOverflowMenu = false
                                     showExportAllEncryptedDialog = true
@@ -530,14 +518,14 @@ fun MainScreen(
                                 enabled = uiState.profiles.any { !it.isLocked }
                             )
                             DropdownMenuItem(
-                                text = { Text("Import Profiles") },
+                                text = { Text(tx("Import Profiles", "Импорт профилей")) },
                                 onClick = {
                                     showOverflowMenu = false
                                     showImportDialog = true
                                 }
                             )
                             DropdownMenuItem(
-                                text = { Text("Delete Duplicate Profiles") },
+                                text = { Text(tx("Delete Duplicate Profiles", "Удалить дубликаты профилей")) },
                                 onClick = {
                                     showOverflowMenu = false
                                     showDeleteDuplicatesDialog = true
@@ -545,7 +533,7 @@ fun MainScreen(
                                 enabled = uiState.profiles.size > 1
                             )
                             DropdownMenuItem(
-                                text = { Text("Delete All Profiles") },
+                                text = { Text(tx("Delete All Profiles", "Удалить все профили")) },
                                 onClick = {
                                     showOverflowMenu = false
                                     showDeleteAllDialog = true
@@ -918,8 +906,8 @@ fun MainScreen(
                     HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
                     AddMenuOption(
                         icon = Icons.Default.Link,
-                        title = "Chain",
-                        description = "Chain multiple profiles",
+                        title = tx("Chain", "Цепочка"),
+                        description = tx("Chain multiple profiles", "Соединить несколько профилей"),
                         onClick = {
                             showAddMenu = false
                             onNavigateToAddChain()
@@ -927,7 +915,7 @@ fun MainScreen(
                     )
                     AddMenuOption(
                         icon = Icons.Default.FileDownload,
-                        title = "Import",
+                        title = tx("Import", "Импорт"),
                         description = "",
                         onClick = {
                             showAddMenu = false
@@ -947,62 +935,32 @@ fun MainScreen(
         DebugLogSheet(onDismiss = { showLogSheet = false })
     }
 
-    // Lite version info dialog
-    if (showLiteInfoDialog) {
-        AlertDialog(
-            onDismissRequest = { showLiteInfoDialog = false },
-            title = { Text(tx("SlipNet Lite", "SlipNet Lite")) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(tx(
-                        "SlipNet Lite is a lightweight version with a smaller app size.",
-                        "SlipNet Lite - облегченная версия с меньшим размером приложения."
-                    ))
-                    Text(tx("Included protocols:", "Доступные протоколы:"), fontWeight = FontWeight.Bold)
-                    Text("• Slipstream / Slipstream + SSH")
-                    Text("• DNSTT / DNSTT + SSH")
-                    Text("• VayDNS / VayDNS + SSH")
-                    Text("• SSH")
-                    Text(tx("• DOH (DNS over HTTPS)", "• DOH (DNS over HTTPS)"))
-                    Text("• SOCKS5")
-                    Text("• VLESS")
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-                    AboutDialogContent()
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showLiteInfoDialog = false }) {
-                    Text("OK")
-                }
-            }
-        )
-    }
-
     // Share dialog
     if (showShareDialog) {
+        val shareChooserTitle = tx("Share SlipNet", "Поделиться SlipNet")
         AlertDialog(
             onDismissRequest = { showShareDialog = false },
-            title = { Text("Share SlipNet") },
+            title = { Text(shareChooserTitle) },
             text = {
                 Column(modifier = Modifier.fillMaxWidth()) {
                     Text(
-                        "How would you like to share the app?",
+                        tx("How would you like to share the app?", "Как поделиться приложением?"),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(Modifier.height(16.dp))
                     TextButton(
-                        onClick = { showShareDialog = false; shareApk(context) },
+                        onClick = { showShareDialog = false; shareApk(context, shareChooserTitle) },
                         modifier = Modifier.fillMaxWidth()
-                    ) { Text("APK File") }
+                    ) { Text(tx("APK File", "APK-файл")) }
                     TextButton(
-                        onClick = { showShareDialog = false; shareGithubLink(context) },
+                        onClick = { showShareDialog = false; shareGithubLink(context, shareChooserTitle) },
                         modifier = Modifier.fillMaxWidth()
-                    ) { Text("GitHub Link") }
+                    ) { Text(tx("GitHub Link", "Ссылка GitHub")) }
                     TextButton(
-                        onClick = { showShareDialog = false; shareTelegramLink(context) },
+                        onClick = { showShareDialog = false; shareTelegramLink(context, shareChooserTitle) },
                         modifier = Modifier.fillMaxWidth()
-                    ) { Text("Telegram Channel") }
+                    ) { Text(tx("Telegram Channel", "Telegram-канал")) }
                 }
             },
             confirmButton = {}
@@ -1013,18 +971,18 @@ fun MainScreen(
     profileToDelete?.let { profile ->
         AlertDialog(
             onDismissRequest = { profileToDelete = null },
-            title = { Text("Delete Profile") },
-            text = { Text("Are you sure you want to delete \"${profile.name}\"?") },
+            title = { Text(tx("Delete Profile", "Удалить профиль")) },
+            text = { Text(tx("Are you sure you want to delete \"${profile.name}\"?", "Точно удалить \"${profile.name}\"?")) },
             confirmButton = {
                 TextButton(
                     onClick = {
                         viewModel.deleteProfile(profile)
                         profileToDelete = null
                     }
-                ) { Text("Delete") }
+                ) { Text(tx("Delete", "Удалить")) }
             },
             dismissButton = {
-                TextButton(onClick = { profileToDelete = null }) { Text("Cancel") }
+                TextButton(onClick = { profileToDelete = null }) { Text(tx("Cancel", "Отмена")) }
             }
         )
     }
@@ -1033,9 +991,12 @@ fun MainScreen(
     if (showDeleteAllDialog) {
         AlertDialog(
             onDismissRequest = { showDeleteAllDialog = false },
-            title = { Text("Delete All Profiles") },
+            title = { Text(tx("Delete All Profiles", "Удалить все профили")) },
             text = {
-                Text("Are you sure you want to delete all profiles? This cannot be undone.")
+                Text(tx(
+                    "Are you sure you want to delete all profiles? This cannot be undone.",
+                    "Точно удалить все профили? Это действие нельзя отменить."
+                ))
             },
             confirmButton = {
                 TextButton(
@@ -1043,10 +1004,10 @@ fun MainScreen(
                         viewModel.deleteAllProfiles()
                         showDeleteAllDialog = false
                     }
-                ) { Text("Delete All") }
+                ) { Text(tx("Delete All", "Удалить все")) }
             },
             dismissButton = {
-                TextButton(onClick = { showDeleteAllDialog = false }) { Text("Cancel") }
+                TextButton(onClick = { showDeleteAllDialog = false }) { Text(tx("Cancel", "Отмена")) }
             }
         )
     }
@@ -1055,9 +1016,12 @@ fun MainScreen(
     if (showDeleteDuplicatesDialog) {
         AlertDialog(
             onDismissRequest = { showDeleteDuplicatesDialog = false },
-            title = { Text("Delete Duplicate Profiles") },
+            title = { Text(tx("Delete Duplicate Profiles", "Удалить дубликаты профилей")) },
             text = {
-                Text("This will remove profiles with identical connection settings, keeping one copy of each.")
+                Text(tx(
+                    "This will remove profiles with identical connection settings, keeping one copy of each.",
+                    "Будут удалены профили с одинаковыми настройками подключения, останется по одной копии."
+                ))
             },
             confirmButton = {
                 TextButton(
@@ -1065,10 +1029,10 @@ fun MainScreen(
                         viewModel.deleteDuplicateProfiles()
                         showDeleteDuplicatesDialog = false
                     }
-                ) { Text("Delete Duplicates") }
+                ) { Text(tx("Delete Duplicates", "Удалить дубликаты")) }
             },
             dismissButton = {
-                TextButton(onClick = { showDeleteDuplicatesDialog = false }) { Text("Cancel") }
+                TextButton(onClick = { showDeleteDuplicatesDialog = false }) { Text(tx("Cancel", "Отмена")) }
             }
         )
     }
@@ -1094,10 +1058,12 @@ fun MainScreen(
                     }
                 }
             },
-            title = { Text("Disable Battery Optimization") },
+            title = { Text(tx("Disable Battery Optimization", "Отключить оптимизацию батареи")) },
             text = {
-                Text("For reliable VPN operation, disable battery optimization for SlipNet. " +
-                     "Without this, Android may suspend the VPN when the screen is off.")
+                Text(tx(
+                    "For reliable VPN operation, disable battery optimization for SlipNet. Without this, Android may suspend the VPN when the screen is off.",
+                    "Для надежной работы VPN отключи оптимизацию батареи для SlipNet. Иначе Android может приостанавливать VPN при выключенном экране."
+                ))
             },
             confirmButton = {
                 TextButton(
@@ -1129,7 +1095,7 @@ fun MainScreen(
                             }
                         }
                     }
-                ) { Text("Disable") }
+                ) { Text(tx("Disable", "Отключить")) }
             },
             dismissButton = {
                 TextButton(
@@ -1150,7 +1116,7 @@ fun MainScreen(
                             }
                         }
                     }
-                ) { Text("Skip") }
+                ) { Text(tx("Skip", "Пропустить")) }
             }
         )
     }
@@ -1159,26 +1125,29 @@ fun MainScreen(
     uiState.importPreview?.let { preview ->
         AlertDialog(
             onDismissRequest = { viewModel.cancelImport() },
-            title = { Text("Import Profiles") },
+            title = { Text(tx("Import Profiles", "Импорт профилей")) },
             text = {
                 Column(
                     modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
-                        text = "${preview.profiles.size} profile(s) found:",
+                        text = tx(
+                            "${preview.profiles.size} profile(s) found:",
+                            "Найдено профилей: ${preview.profiles.size}"
+                        ),
                         style = MaterialTheme.typography.bodyMedium
                     )
                     preview.profiles.forEach { profile ->
                         Text(
-                            text = if (profile.isLocked) "\u2022 ${profile.name} (Locked)" else "\u2022 ${profile.name}",
+                            text = if (profile.isLocked) "\u2022 ${profile.name} ${tx("(Locked)", "(заблокирован)")}" else "\u2022 ${profile.name}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                     if (preview.warnings.isNotEmpty()) {
                         Text(
-                            text = "Warnings:",
+                            text = tx("Warnings:", "Предупреждения:"),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.error,
                             modifier = Modifier.padding(top = 8.dp)
@@ -1194,10 +1163,10 @@ fun MainScreen(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { viewModel.confirmImport() }) { Text("Import") }
+                TextButton(onClick = { viewModel.confirmImport() }) { Text(tx("Import", "Импорт")) }
             },
             dismissButton = {
-                TextButton(onClick = { viewModel.cancelImport() }) { Text("Cancel") }
+                TextButton(onClick = { viewModel.cancelImport() }) { Text(tx("Cancel Import", "Отменить импорт")) }
             }
         )
     }
@@ -1608,14 +1577,14 @@ fun MainScreen(
                 showImportDialog = false
                 importText = ""
             },
-            title = { Text("Import Profiles") },
+            title = { Text(tx("Import Profiles", "Импорт профилей")) },
             text = {
                 Column(
                     modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
-                        text = "Paste the config below:",
+                        text = tx("Paste the config below:", "Вставь конфиг ниже:"),
                         style = MaterialTheme.typography.bodyMedium
                     )
                     OutlinedTextField(
@@ -1638,14 +1607,14 @@ fun MainScreen(
                                     if (clip.isNotBlank()) importText = clip
                                 }
                             }
-                        ) { Text("Paste") }
+                        ) { Text(tx("Paste", "Вставить")) }
                         TextButton(
                             onClick = {
                                 importFileLauncher.launch(arrayOf("text/plain", "*/*"))
                                 showImportDialog = false
                                 importText = ""
                             }
-                        ) { Text("File") }
+                        ) { Text(tx("File", "Файл")) }
                         TextButton(
                             onClick = {
                                 showImportDialog = false
@@ -1657,7 +1626,7 @@ fun MainScreen(
                                     setCaptureActivity(QrScannerActivity::class.java)
                                 })
                             }
-                        ) { Text("QR Code") }
+                        ) { Text(tx("QR Code", "QR-код")) }
                     }
                 }
             },
@@ -1671,7 +1640,7 @@ fun MainScreen(
                         }
                     },
                     enabled = importText.isNotBlank()
-                ) { Text("Import") }
+                ) { Text(tx("Import", "Импорт")) }
             },
             dismissButton = {
                 TextButton(
@@ -1679,7 +1648,7 @@ fun MainScreen(
                         showImportDialog = false
                         importText = ""
                     }
-                ) { Text("Cancel") }
+                ) { Text(tx("Cancel Import", "Отменить импорт")) }
             }
         )
     }
@@ -1689,9 +1658,12 @@ fun MainScreen(
         val context = LocalContext.current
         AlertDialog(
             onDismissRequest = { viewModel.dismissUpdate() },
-            title = { Text("Update Available") },
+            title = { Text(tx("Update Available", "Доступно обновление")) },
             text = {
-                Text("Version ${update.versionName} is available. You are on ${BuildConfig.VERSION_NAME}.")
+                Text(tx(
+                    "Version ${update.versionName} is available. You are on ${BuildConfig.VERSION_NAME}.",
+                    "Доступна версия ${update.versionName}. Сейчас установлена ${BuildConfig.VERSION_NAME}."
+                ))
             },
             confirmButton = {
                 TextButton(onClick = {
@@ -1702,16 +1674,16 @@ fun MainScreen(
                     )
                     context.startActivity(intent)
                 }) {
-                    Text("Download")
+                    Text(tx("Download", "Скачать"))
                 }
             },
             dismissButton = {
                 Row {
                     TextButton(onClick = { viewModel.skipUpdate() }) {
-                        Text("Skip")
+                        Text(tx("Skip", "Пропустить"))
                     }
                     TextButton(onClick = { viewModel.dismissUpdate() }) {
-                        Text("Later")
+                        Text(tx("Later", "Позже"))
                     }
                 }
             }
@@ -2222,25 +2194,25 @@ private fun AddMenuGridItem(
 
 // ── Share helpers ────────────────────────────────────────────────────────
 
-private fun shareGithubLink(context: Context) {
+private fun shareGithubLink(context: Context, chooserTitle: String) {
     val intent = Intent(Intent.ACTION_SEND).apply {
         type = "text/plain"
         putExtra(Intent.EXTRA_SUBJECT, "SlipNet VPN")
         putExtra(Intent.EXTRA_TEXT, "Download SlipNet VPN:\nhttps://github.com/anonvector/SlipNet/releases/latest")
     }
-    context.startActivity(Intent.createChooser(intent, "Share SlipNet"))
+    context.startActivity(Intent.createChooser(intent, chooserTitle))
 }
 
-private fun shareTelegramLink(context: Context) {
+private fun shareTelegramLink(context: Context, chooserTitle: String) {
     val intent = Intent(Intent.ACTION_SEND).apply {
         type = "text/plain"
         putExtra(Intent.EXTRA_SUBJECT, "SlipNet VPN")
         putExtra(Intent.EXTRA_TEXT, "Join SlipNet VPN on Telegram:\nhttps://t.me/SlipNet_app")
     }
-    context.startActivity(Intent.createChooser(intent, "Share SlipNet"))
+    context.startActivity(Intent.createChooser(intent, chooserTitle))
 }
 
-private fun shareApk(context: Context) {
+private fun shareApk(context: Context, chooserTitle: String) {
     try {
         val appInfo = context.applicationInfo
         val sharedDir = java.io.File(context.cacheDir, "shared")
@@ -2258,7 +2230,7 @@ private fun shareApk(context: Context) {
                 putExtra(Intent.EXTRA_STREAM, uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            context.startActivity(Intent.createChooser(intent, "Share SlipNet"))
+            context.startActivity(Intent.createChooser(intent, chooserTitle))
         } else {
             val apksFile = java.io.File(sharedDir, "SlipNet-v${app.slipnet.BuildConfig.VERSION_NAME}.apks")
             java.util.zip.ZipOutputStream(apksFile.outputStream().buffered()).use { zip ->
@@ -2277,7 +2249,7 @@ private fun shareApk(context: Context) {
                 putExtra(Intent.EXTRA_STREAM, uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            context.startActivity(Intent.createChooser(intent, "Share SlipNet"))
+            context.startActivity(Intent.createChooser(intent, chooserTitle))
         }
     } catch (_: Exception) { }
 }

@@ -468,8 +468,7 @@ fun SettingsScreen(
 
             // DNS Settings
             SettingsSection(
-                title = "DNS",
-                subtitle = tx("Changes apply on next connection", "Изменения применятся при следующем подключении")
+                title = "DNS"
             ) {
                 // The override only actually applies when the toggle is on AND
                 // the IP list is non-empty (matches SlipNetVpnService's
@@ -562,8 +561,7 @@ fun SettingsScreen(
 
             // Network Settings
             SettingsSection(
-                title = tx("Network", "Сеть"),
-                subtitle = tx("Changes apply on next connection", "Изменения применятся при следующем подключении")
+                title = tx("Network", "Сеть")
             ) {
                 SwitchSettingItem(
                     icon = Icons.Default.Block,
@@ -625,8 +623,7 @@ fun SettingsScreen(
 
             // Split Tunneling Settings
             SettingsSection(
-                title = tx("Split Tunneling", "Раздельное туннелирование"),
-                subtitle = tx("Changes apply on next connection", "Изменения применятся при следующем подключении")
+                title = tx("Split Tunneling", "Раздельное туннелирование")
             ) {
                 SwitchSettingItem(
                     icon = Icons.Default.CallSplit,
@@ -665,8 +662,7 @@ fun SettingsScreen(
 
             // Domain Routing Settings
             SettingsSection(
-                title = tx("Domain Routing", "Маршрутизация доменов"),
-                subtitle = tx("Changes apply on next connection", "Изменения применятся при следующем подключении")
+                title = tx("Domain Routing", "Маршрутизация доменов")
             ) {
                 SwitchSettingItem(
                     icon = Icons.Default.Language,
@@ -705,8 +701,7 @@ fun SettingsScreen(
 
             // Geo-Bypass Settings
             SettingsSection(
-                title = tx("Geo-Bypass", "Гео-обход"),
-                subtitle = tx("Changes apply on next connection", "Изменения применятся при следующем подключении")
+                title = tx("Geo-Bypass", "Гео-обход")
             ) {
                 SwitchSettingItem(
                     icon = Icons.Default.Public,
@@ -730,8 +725,7 @@ fun SettingsScreen(
 
             // SSH Tunnel Settings
             SettingsSection(
-                title = tx("SSH Tunnel", "SSH-туннель"),
-                subtitle = tx("Changes apply on next connection", "Изменения применятся при следующем подключении")
+                title = tx("SSH Tunnel", "SSH-туннель")
             ) {
                 ClickableSettingItem(
                     icon = Icons.Default.Lock,

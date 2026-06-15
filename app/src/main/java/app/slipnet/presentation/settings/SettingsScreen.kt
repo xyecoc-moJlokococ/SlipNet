@@ -1452,7 +1452,7 @@ fun SettingsScreen(
         AlertDialog(
             onDismissRequest = { showAboutDialog = false },
             title = { Text(tx("About SlipNet", "О SlipNet")) },
-            text = { LiteAboutDialogContent() },
+            text = { AboutDialogContent() },
             confirmButton = {
                 TextButton(onClick = { showAboutDialog = false }) {
                     Text(tx("Close", "Закрыть"))
@@ -1461,45 +1461,6 @@ fun SettingsScreen(
         )
     }
 
-}
-
-@Composable
-private fun LiteAboutDialogContent() {
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Text(
-            text = tx(
-                "SlipNet Lite is a lightweight version with a smaller app size.",
-                "SlipNet Lite - облегченная версия с меньшим размером приложения."
-            ),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Text(
-            text = tx("Included protocols:", "Доступные протоколы:"),
-            style = MaterialTheme.typography.labelLarge
-        )
-        listOf(
-            "Slipstream / Slipstream + SSH",
-            "DNSTT / DNSTT + SSH",
-            "VayDNS / VayDNS + SSH",
-            "SSH",
-            "DOH (DNS over HTTPS)",
-            "SOCKS5",
-            "VLESS"
-        ).forEach { protocol ->
-            Text(
-                text = "• $protocol",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-        AboutDialogContent()
-    }
 }
 
 @Composable

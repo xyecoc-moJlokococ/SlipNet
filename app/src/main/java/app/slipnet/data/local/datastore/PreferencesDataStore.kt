@@ -33,6 +33,7 @@ class PreferencesDataStore @Inject constructor(
     private object Keys {
         val AUTO_CONNECT_ON_BOOT = booleanPreferencesKey("auto_connect_on_boot")
         val ACTIVE_PROFILE_ID = longPreferencesKey("active_profile_id")
+        val APP_LANGUAGE = stringPreferencesKey("app_language")
         val DARK_MODE = stringPreferencesKey("dark_mode")
         val DEBUG_LOGGING = booleanPreferencesKey("debug_logging")
         val TOTAL_BYTES_SENT = longPreferencesKey("total_bytes_sent")
@@ -155,6 +156,17 @@ class PreferencesDataStore @Inject constructor(
             } else {
                 prefs.remove(Keys.ACTIVE_PROFILE_ID)
             }
+        }
+    }
+
+    // App language
+    val appLanguage: Flow<AppLanguage> = dataStore.data.map { prefs ->
+        AppLanguage.fromValue(prefs[Keys.APP_LANGUAGE] ?: AppLanguage.RUSSIAN.value)
+    }
+
+    suspend fun setAppLanguage(language: AppLanguage) {
+        dataStore.edit { prefs ->
+            prefs[Keys.APP_LANGUAGE] = language.value
         }
     }
 
@@ -716,7 +728,7 @@ class PreferencesDataStore @Inject constructor(
     companion object {
         const val DEFAULT_REMOTE_DNS = "8.8.8.8"
         const val DEFAULT_REMOTE_DNS_FALLBACK = "1.1.1.1"
-        const val DEFAULT_MTU = 1280
+        const val DEFAULT_MTU = 1500
         /** Fallback only — [ensureProxyPortInitialized] assigns a random port on first launch. */
         const val DEFAULT_PROXY_PORT = 10880
     }
@@ -1044,6 +1056,17 @@ enum class DarkMode(val value: String) {
     companion object {
         fun fromValue(value: String): DarkMode {
             return entries.find { it.value == value } ?: SYSTEM
+        }
+    }
+}
+
+enum class AppLanguage(val value: String, val displayName: String) {
+    RUSSIAN("ru", "Русский"),
+    ENGLISH("en", "English");
+
+    companion object {
+        fun fromValue(value: String): AppLanguage {
+            return entries.find { it.value == value } ?: RUSSIAN
         }
     }
 }

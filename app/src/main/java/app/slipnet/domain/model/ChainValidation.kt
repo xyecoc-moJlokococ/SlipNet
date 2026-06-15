@@ -15,52 +15,56 @@ enum class LayerOutput {
  *
  * Bridges are Kotlin object singletons, so a chain cannot contain two profiles
  * that use the same underlying bridge. The bridge groups are:
- * - DnsttBridge: DNSTT, NOIZDNS
+ * - DnsttBridge: DNSTT
  * - SlipstreamBridge: SLIPSTREAM
  * - SshTunnelBridge: SSH (and the SSH layer in combo types)
- * - NaiveBridge: NAIVE
- * - SnowflakeBridge/TorSocksBridge: SNOWFLAKE
  *
  * In a chain, combo types (DNSTT_SSH, SLIPSTREAM_SSH, etc.) are NOT used.
  * Each profile contributes exactly one layer using its single-layer tunnel type.
- * Valid single-layer types for chaining: DNSTT, NOIZDNS, SLIPSTREAM, SSH, NAIVE, SNOWFLAKE, DOH.
+ * Valid single-layer types for chaining: DNSTT, VAYDNS, SLIPSTREAM, SSH, DOH, SOCKS5.
  */
 object ChainValidation {
 
     /** Tunnel types that can be used in a chain (single-layer types only). */
     val CHAINABLE_TYPES = setOf(
-        TunnelType.DNSTT, TunnelType.NOIZDNS, TunnelType.VAYDNS, TunnelType.SLIPSTREAM,
-        TunnelType.SSH, TunnelType.NAIVE, TunnelType.SNOWFLAKE, TunnelType.DOH,
+        TunnelType.DNSTT,
+        TunnelType.VAYDNS,
+        TunnelType.SLIPSTREAM,
+        TunnelType.SSH,
+        TunnelType.DOH,
         TunnelType.SOCKS5
     )
 
     /** Tunnel types that can serve as an intermediate (non-final) layer. */
     val CAN_BE_INTERMEDIATE = setOf(
-        TunnelType.DNSTT, TunnelType.NOIZDNS, TunnelType.VAYDNS, TunnelType.SLIPSTREAM,
-        TunnelType.NAIVE, TunnelType.SNOWFLAKE, TunnelType.SOCKS5,
-        TunnelType.SSH, TunnelType.DOH
+        TunnelType.DNSTT,
+        TunnelType.VAYDNS,
+        TunnelType.SLIPSTREAM,
+        TunnelType.SOCKS5,
+        TunnelType.SSH,
+        TunnelType.DOH
     )
 
     /** Tunnel types that can serve as the final (innermost) layer. */
     val CAN_BE_FINAL = setOf(
-        TunnelType.SSH, TunnelType.DNSTT, TunnelType.NOIZDNS, TunnelType.VAYDNS,
-        TunnelType.SLIPSTREAM, TunnelType.NAIVE, TunnelType.SNOWFLAKE, TunnelType.DOH,
+        TunnelType.SSH,
+        TunnelType.DNSTT,
+        TunnelType.VAYDNS,
+        TunnelType.SLIPSTREAM,
+        TunnelType.DOH,
         TunnelType.SOCKS5
     )
 
     /** What a tunnel type provides to the next layer in the chain. */
     fun outputType(type: TunnelType): LayerOutput? = when (type) {
-        // Standalone DNSTT/NoizDNS/Slipstream tunnel to a remote Dante SOCKS5 proxy,
+        // Standalone DNS tunnels to a remote Dante SOCKS5 proxy,
         // so the next layer must perform a SOCKS5 handshake (with auth) to connect.
-        TunnelType.DNSTT, TunnelType.NOIZDNS, TunnelType.VAYDNS -> LayerOutput.SOCKS5
+        TunnelType.DNSTT, TunnelType.VAYDNS -> LayerOutput.SOCKS5
         TunnelType.SLIPSTREAM -> LayerOutput.SOCKS5
         TunnelType.SSH -> LayerOutput.SOCKS5
-        TunnelType.NAIVE -> LayerOutput.SOCKS5
-        TunnelType.SNOWFLAKE -> LayerOutput.SOCKS5
         TunnelType.SOCKS5 -> LayerOutput.SOCKS5
         // DohBridge is itself a SOCKS5 server: CONNECTs are TCP-forwarded
-        // with DoH name resolution, so the next layer (e.g. Tor) can CONNECT
-        // through it to reach bridges/CDN endpoints that local DNS can't resolve.
+        // with DoH name resolution.
         TunnelType.DOH -> LayerOutput.SOCKS5
         else -> null
     }
@@ -69,17 +73,10 @@ object ChainValidation {
     fun canConsumeInput(type: TunnelType, input: LayerOutput): Boolean = when (type) {
         TunnelType.SSH -> true  // SSH can connect over raw TCP or SOCKS5
         TunnelType.SOCKS5 -> true  // SOCKS5 outbound traffic is routed through VPN/previous layer
-        TunnelType.DNSTT, TunnelType.NOIZDNS, TunnelType.VAYDNS -> input == LayerOutput.SOCKS5  // needs SOCKS5 for resolver bypass
-        TunnelType.NAIVE -> true  // NaiveProxy outbound is routed through VPN/previous layer
+        TunnelType.DNSTT, TunnelType.VAYDNS -> input == LayerOutput.SOCKS5  // needs SOCKS5 for resolver bypass
         TunnelType.SLIPSTREAM -> false  // Slipstream connects to its own server directly
         // DoH can route its upstream HTTPS through a previous SOCKS5 layer
-        // (e.g. Snowflake/Tor), giving DoH-over-Tor.
         TunnelType.DOH -> input == LayerOutput.SOCKS5
-        // Tor can route its own connections (and PTs: meek/obfs4/webtunnel)
-        // through a previous SOCKS5 layer via torrc Socks5Proxy and
-        // TOR_PT_PROXY, giving Tor-over-DoH for regions where direct access
-        // to bridge endpoints is blocked but a DoH resolver is still reachable.
-        TunnelType.SNOWFLAKE -> input == LayerOutput.SOCKS5
         else -> false
     }
 
@@ -88,12 +85,10 @@ object ChainValidation {
      * Two profiles with the same bridge group cannot coexist in a chain.
      */
     fun bridgeGroup(type: TunnelType): String = when (type) {
-        TunnelType.DNSTT, TunnelType.NOIZDNS -> "dnstt"
+        TunnelType.DNSTT -> "dnstt"
         TunnelType.VAYDNS -> "vaydns"
         TunnelType.SLIPSTREAM -> "slipstream"
         TunnelType.SSH -> "ssh"
-        TunnelType.NAIVE -> "naive"
-        TunnelType.SNOWFLAKE -> "snowflake"
         TunnelType.DOH -> "doh"
         TunnelType.SOCKS5 -> "socks5"
         else -> type.value
@@ -106,7 +101,6 @@ object ChainValidation {
      */
     fun needsVpnFirst(type: TunnelType): Boolean = when (type) {
         TunnelType.SLIPSTREAM -> false
-        TunnelType.SNOWFLAKE -> false
         else -> true
     }
 
@@ -119,6 +113,9 @@ object ChainValidation {
 
         // Check all types are single-layer chainable
         for ((i, p) in profiles.withIndex()) {
+            if (!p.tunnelType.isAvailable()) {
+                return "${p.name}: ${p.tunnelType.displayName} is not supported in this build"
+            }
             if (p.tunnelType !in CHAINABLE_TYPES) {
                 return "${p.name}: ${p.tunnelType.displayName} cannot be used in a chain (use single-layer types)"
             }

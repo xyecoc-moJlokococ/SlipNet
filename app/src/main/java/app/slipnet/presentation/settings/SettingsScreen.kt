@@ -6,7 +6,6 @@ import android.os.PowerManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.material3.CircularProgressIndicator
 import android.provider.Settings
 import app.slipnet.BuildConfig
 import app.slipnet.presentation.common.components.AboutDialogContent
@@ -91,12 +90,14 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import app.slipnet.data.local.datastore.AppLanguage
 import app.slipnet.data.local.datastore.DarkMode
 import app.slipnet.data.local.datastore.DnsWorkerMode
 import app.slipnet.data.local.datastore.DomainRoutingMode
 import app.slipnet.data.local.datastore.SplitTunnelingMode
 import app.slipnet.data.local.datastore.SshCipher
 import app.slipnet.tunnel.GeoBypassCountry
+import app.slipnet.presentation.localization.tx
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardActions
@@ -181,6 +182,7 @@ fun SettingsScreen(
 
     // Battery optimization state
     val context = LocalContext.current
+    val uriHandler = LocalUriHandler.current
     var isBatteryOptimized by remember { mutableStateOf(true) }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
@@ -199,15 +201,15 @@ fun SettingsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Settings") },
+                title = { Text(tx("Settings", "Настройки")) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = tx("Back", "Назад"))
                     }
                 },
                 actions = {
                     IconButton(onClick = { showAboutDialog = true }) {
-                        Icon(Icons.Default.Help, contentDescription = "About")
+                        Icon(Icons.Default.Help, contentDescription = tx("About", "О программе"))
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -235,11 +237,11 @@ fun SettingsScreen(
             DonateCard()
 
             // Connection Settings
-            SettingsSection(title = "Connection") {
+            SettingsSection(title = tx("Connection", "Подключение")) {
                 SwitchSettingItem(
                     icon = Icons.Default.PowerSettingsNew,
-                    title = "Auto-connect on boot",
-                    description = "Automatically connect when device starts",
+                    title = tx("Auto-connect on boot", "Автоподключение при запуске"),
+                    description = tx("Automatically connect when device starts", "Автоматически подключаться после запуска устройства"),
                     checked = uiState.autoConnectOnBoot,
                     onCheckedChange = { viewModel.setAutoConnectOnBoot(it) }
                 )
@@ -248,8 +250,8 @@ fun SettingsScreen(
 
                 SwitchSettingItem(
                     icon = Icons.Default.SettingsEthernet,
-                    title = "Proxy-only mode",
-                    description = "Expose SOCKS5 proxy without creating VPN tunnel",
+                    title = tx("Proxy-only mode", "Только прокси"),
+                    description = tx("Expose SOCKS5 proxy without creating VPN tunnel", "Запускать SOCKS5-прокси без VPN-туннеля"),
                     checked = uiState.proxyOnlyMode,
                     onCheckedChange = { viewModel.setProxyOnlyMode(it) }
                 )
@@ -258,8 +260,8 @@ fun SettingsScreen(
 
                 SwitchSettingItem(
                     icon = Icons.Default.Shield,
-                    title = "Kill switch",
-                    description = "Block all traffic if VPN connection drops",
+                    title = tx("Kill switch", "Kill switch"),
+                    description = tx("Block all traffic if VPN connection drops", "Блокировать весь трафик при обрыве VPN"),
                     checked = uiState.killSwitch,
                     onCheckedChange = { viewModel.setKillSwitch(it) }
                 )
@@ -268,8 +270,8 @@ fun SettingsScreen(
 
                 SwitchSettingItem(
                     icon = Icons.Default.Sync,
-                    title = "Auto-reconnect",
-                    description = "Automatically reconnect if VPN drops unexpectedly",
+                    title = tx("Auto-reconnect", "Автопереподключение"),
+                    description = tx("Automatically reconnect if VPN drops unexpectedly", "Автоматически переподключаться при неожиданном обрыве VPN"),
                     checked = uiState.autoReconnect,
                     onCheckedChange = { viewModel.setAutoReconnect(it) }
                 )
@@ -278,22 +280,23 @@ fun SettingsScreen(
 
                 SwitchSettingItem(
                     icon = Icons.Default.Notifications,
-                    title = "Notification traffic counter",
-                    description = "Show upload/download speed and data usage in notification",
+                    title = tx("Notification traffic counter", "Счетчик трафика в уведомлении"),
+                    description = tx("Show upload/download speed and data usage in notification", "Показывать скорость и расход трафика в уведомлении"),
                     checked = uiState.showNotificationTraffic,
                     onCheckedChange = { viewModel.setShowNotificationTraffic(it) }
                 )
 
                 SettingsDivider()
 
+                val sleepTimerOffLabel = tx("Off", "Выкл")
                 StepperSettingItem(
                     icon = Icons.Default.Timer,
-                    title = "Sleep timer",
-                    description = "Auto-disconnect after a set time",
+                    title = tx("Sleep timer", "Таймер отключения"),
+                    description = tx("Auto-disconnect after a set time", "Автоматически отключать VPN через заданное время"),
                     value = uiState.sleepTimerMinutes,
                     step = 5,
                     range = 0..120,
-                    valueFormatter = { if (it == 0) "Off" else "$it min" },
+                    valueFormatter = { if (it == 0) sleepTimerOffLabel else "$it min" },
                     onValueChange = { viewModel.setSleepTimerMinutes(it) }
                 )
 
@@ -326,11 +329,11 @@ fun SettingsScreen(
 
             // Tools Section
             if (onNavigateToScanner != null) {
-                SettingsSection(title = "Tools") {
+                SettingsSection(title = tx("Tools", "Инструменты")) {
                     ClickableSettingItem(
                         icon = Icons.Default.Search,
-                        title = "DNS Resolver Scanner",
-                        description = "Find working DNS resolvers for your profiles",
+                        title = tx("DNS Resolver Scanner", "Сканер DNS-резолверов"),
+                        description = tx("Find working DNS resolvers for your profiles", "Найти рабочие DNS-резолверы для профилей"),
                         onClick = onNavigateToScanner
                     )
                 }
@@ -338,8 +341,8 @@ fun SettingsScreen(
 
             // Proxy Settings
             SettingsSection(
-                title = "Proxy Settings",
-                subtitle = "Changes apply on next connection"
+                title = tx("Proxy Settings", "Настройки прокси"),
+                subtitle = tx("Changes apply on next connection", "Изменения применятся при следующем подключении")
             ) {
                 AddressSettingItem(
                     value = uiState.proxyListenAddress,
@@ -355,10 +358,10 @@ fun SettingsScreen(
 
                 TextFieldSettingItem(
                     icon = Icons.Default.Numbers,
-                    title = "Listen Port",
+                    title = tx("Listen Port", "Порт прослушивания"),
                     value = proxyPort,
                     placeholder = "10880",
-                    supportingText = if (portsConflict) "Must differ from HTTP proxy port" else "Local SOCKS5 proxy port",
+                    supportingText = if (portsConflict) tx("Must differ from HTTP proxy port", "Должен отличаться от HTTP proxy port") else tx("Local SOCKS5 proxy port", "Локальный порт SOCKS5-прокси"),
                     isError = portsConflict,
                     keyboardType = KeyboardType.Number,
                     onValueChange = { text ->
@@ -371,9 +374,9 @@ fun SettingsScreen(
 
                 SwitchSettingItem(
                     icon = Icons.Default.Lock,
-                    title = "Proxy Authentication",
-                    description = if (uiState.proxyAuthEnabled) "Username/password required to use the proxy"
-                        else "Any app can use the local proxy without credentials",
+                    title = tx("Proxy Authentication", "Аутентификация прокси"),
+                    description = if (uiState.proxyAuthEnabled) tx("Username/password required to use the proxy", "Для прокси нужен логин и пароль")
+                        else tx("Any app can use the local proxy without credentials", "Любое приложение может использовать локальный прокси без пароля"),
                     checked = uiState.proxyAuthEnabled,
                     onCheckedChange = { viewModel.setProxyAuthEnabled(it) }
                 )
@@ -421,8 +424,8 @@ fun SettingsScreen(
 
                 SwitchSettingItem(
                     icon = Icons.Default.Lan,
-                    title = "HTTP proxy",
-                    description = "Enable HTTP proxy for devices that don't support SOCKS5",
+                    title = tx("HTTP proxy", "HTTP-прокси"),
+                    description = tx("Enable HTTP proxy for devices that don't support SOCKS5", "Включить HTTP-прокси для устройств без SOCKS5"),
                     checked = uiState.httpProxyEnabled,
                     onCheckedChange = { viewModel.setHttpProxyEnabled(it) }
                 )
@@ -773,37 +776,49 @@ fun SettingsScreen(
             }
 
             // Appearance Settings
-            SettingsSection(title = "Appearance") {
+            SettingsSection(title = tx("Appearance", "Внешний вид")) {
+                SwitchSettingItem(
+                    icon = Icons.Default.Language,
+                    title = tx("Language", "Язык"),
+                    description = uiState.appLanguage.displayName,
+                    checked = uiState.appLanguage == AppLanguage.ENGLISH,
+                    onCheckedChange = {
+                        viewModel.setAppLanguage(if (it) AppLanguage.ENGLISH else AppLanguage.RUSSIAN)
+                    }
+                )
+
+                SettingsDivider()
+
                 ClickableSettingItem(
                     icon = Icons.Default.DarkMode,
-                    title = "Dark mode",
+                    title = tx("Dark mode", "Темная тема"),
                     description = when (uiState.darkMode) {
-                        DarkMode.LIGHT -> "Light"
-                        DarkMode.DARK -> "Dark"
-                        DarkMode.AMOLED -> "AMOLED Dark"
-                        DarkMode.SYSTEM -> "Follow system"
+                        DarkMode.LIGHT -> tx("Light", "Светлая")
+                        DarkMode.DARK -> tx("Dark", "Темная")
+                        DarkMode.AMOLED -> tx("AMOLED Dark", "AMOLED темная")
+                        DarkMode.SYSTEM -> tx("Follow system", "Как в системе")
                     },
                     onClick = { showDarkModeDialog = true }
                 )
             }
 
             // Debug Settings
-            SettingsSection(title = "Debug") {
+            SettingsSection(title = tx("Debug", "Отладка")) {
                 SwitchSettingItem(
                     icon = Icons.Default.BugReport,
-                    title = "Debug logging",
-                    description = "Enable verbose logging for troubleshooting",
+                    title = tx("Debug logging", "Отладочные логи"),
+                    description = tx("Enable verbose logging for troubleshooting", "Включить подробные логи для диагностики"),
                     checked = uiState.debugLogging,
                     onCheckedChange = { viewModel.setDebugLogging(it) }
                 )
             }
 
             // Reset Settings
-            SettingsSection(title = "Reset") {
+            SettingsSection(title = tx("Reset", "Сброс")) {
                 ClickableSettingItem(
                     icon = Icons.Default.RestartAlt,
-                    title = "Reset all settings",
-                    description = "Restore all settings to their default values",
+                    title = tx("Reset all settings", "Сбросить все настройки"),
+                    description = tx("Restore all settings to their default values", "Вернуть настройки к значениям по умолчанию"),
                     onClick = { showResetSettingsDialog = true }
                 )
             }
@@ -842,7 +857,7 @@ fun SettingsScreen(
                 }
             }
 
-            // App Info + Check for updates
+            // App Info + original project attribution
             Column(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalAlignment = Alignment.CenterHorizontally
@@ -853,39 +868,19 @@ fun SettingsScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(modifier = Modifier.height(4.dp))
-                when (uiState.updateCheckResult) {
-                    UpdateCheckResult.CHECKING -> {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(14.dp),
-                                strokeWidth = 2.dp
-                            )
-                            Text(
-                                text = "Checking...",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
+                Text(
+                    text = tx("Original created by anonvector", "Оригинал был создан anonvector"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = "github.com/anonvector/SlipNet",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.clickable {
+                        uriHandler.openUri("https://github.com/anonvector/SlipNet")
                     }
-                    UpdateCheckResult.UP_TO_DATE -> {
-                        Text(
-                            text = "You're up to date",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                    else -> {
-                        TextButton(onClick = { viewModel.checkForUpdate() }) {
-                            Text(
-                                text = "Check for updates",
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                        }
-                    }
-                }
+                )
             }
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -1060,7 +1055,7 @@ fun SettingsScreen(
     if (showDarkModeDialog) {
         AlertDialog(
             onDismissRequest = { showDarkModeDialog = false },
-            title = { Text("Dark Mode") },
+            title = { Text(tx("Dark Mode", "Темная тема")) },
             text = {
                 Column {
                     DarkMode.entries.forEach { mode ->
@@ -1084,10 +1079,10 @@ fun SettingsScreen(
                             )
                             Text(
                                 text = when (mode) {
-                                    DarkMode.LIGHT -> "Light"
-                                    DarkMode.DARK -> "Dark"
-                                    DarkMode.AMOLED -> "AMOLED Dark"
-                                    DarkMode.SYSTEM -> "Follow system"
+                                    DarkMode.LIGHT -> tx("Light", "Светлая")
+                                    DarkMode.DARK -> tx("Dark", "Темная")
+                                    DarkMode.AMOLED -> tx("AMOLED Dark", "AMOLED темная")
+                                    DarkMode.SYSTEM -> tx("Follow system", "Как в системе")
                                 },
                                 modifier = Modifier.padding(start = 8.dp)
                             )
@@ -1097,7 +1092,7 @@ fun SettingsScreen(
             },
             confirmButton = {
                 TextButton(onClick = { showDarkModeDialog = false }) {
-                    Text("Cancel")
+                    Text(tx("Cancel", "Отмена"))
                 }
             }
         )
@@ -1430,47 +1425,16 @@ fun SettingsScreen(
     if (showAboutDialog) {
         AlertDialog(
             onDismissRequest = { showAboutDialog = false },
-            title = { Text("About SlipNet") },
+            title = { Text(tx("About SlipNet", "О SlipNet")) },
             text = { AboutDialogContent() },
             confirmButton = {
                 TextButton(onClick = { showAboutDialog = false }) {
-                    Text("Close")
+                    Text(tx("Close", "Закрыть"))
                 }
             }
         )
     }
 
-    // Update available dialog
-    if (uiState.updateCheckResult == UpdateCheckResult.UPDATE_AVAILABLE) {
-        val update = viewModel.availableUpdate
-        if (update != null) {
-            val context = LocalContext.current
-            AlertDialog(
-                onDismissRequest = { viewModel.clearUpdateCheck() },
-                title = { Text("Update Available") },
-                text = {
-                    Text("Version ${update.versionName} is available. You are on ${BuildConfig.VERSION_NAME}.")
-                },
-                confirmButton = {
-                    TextButton(onClick = {
-                        viewModel.clearUpdateCheck()
-                        val intent = android.content.Intent(
-                            android.content.Intent.ACTION_VIEW,
-                            android.net.Uri.parse(update.downloadUrl)
-                        )
-                        context.startActivity(intent)
-                    }) {
-                        Text("Download")
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { viewModel.clearUpdateCheck() }) {
-                        Text("Later")
-                    }
-                }
-            )
-        }
-    }
 }
 
 @Composable

@@ -22,6 +22,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.slipnet.BuildConfig
+import app.slipnet.presentation.localization.tx
 
 @Composable
 fun AboutDialogContent() {
@@ -38,7 +39,10 @@ fun AboutDialogContent() {
             style = MaterialTheme.typography.titleMedium
         )
         Text(
-            text = "A free, source-available anti-censorship VPN tool designed to bypass internet restrictions. SlipNet tunnels your traffic through DNS, SSH, Tor, and other protocols to keep you connected when access is blocked.",
+            text = tx(
+                "A free, source-available anti-censorship VPN tool designed to bypass internet restrictions. SlipNet tunnels your traffic through DNS and SSH-based transports to keep you connected when access is blocked.",
+                "Бесплатный source-available VPN-инструмент против интернет-ограничений. SlipNet туннелирует трафик через DNS и SSH-транспорты, чтобы соединение оставалось доступным при блокировках."
+            ),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -81,12 +85,15 @@ fun AboutDialogContent() {
 
         // Donate
         Text(
-            text = "Support SlipNet",
+            text = tx("Support SlipNet", "Поддержать SlipNet"),
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.primary
         )
         Text(
-            text = "Your donation helps keep this tool free and improving for everyone who needs it.",
+            text = tx(
+                "Your donation helps keep this tool free and improving for everyone who needs it.",
+                "Донаты помогают оставлять инструмент бесплатным и развивать его для всех, кому он нужен."
+            ),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )

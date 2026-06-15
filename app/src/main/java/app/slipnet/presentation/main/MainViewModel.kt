@@ -134,7 +134,6 @@ class MainViewModel @Inject constructor(
         observeProxyOnlyMode()
         observeDebugLogging()
         checkFirstLaunch()
-        checkForUpdate()
     }
 
     // ── Connection ──────────────────────────────────────────────────────
@@ -288,7 +287,7 @@ class MainViewModel @Inject constructor(
         viewModelScope.launch {
             val done = preferencesDataStore.firstLaunchDone.first()
             if (!done) {
-                _uiState.value = _uiState.value.copy(showFirstLaunchAbout = true)
+                preferencesDataStore.setFirstLaunchDone()
             }
         }
     }

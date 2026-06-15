@@ -13,6 +13,7 @@ import app.slipnet.domain.model.ServerProfile
 import app.slipnet.domain.model.SshAuthType
 import app.slipnet.domain.model.ConnectionState
 import app.slipnet.domain.model.TunnelType
+import app.slipnet.domain.model.isAvailable
 import app.slipnet.domain.usecase.GetProfileByIdUseCase
 import app.slipnet.domain.usecase.SaveProfileUseCase
 import app.slipnet.domain.usecase.SetActiveProfileUseCase
@@ -283,7 +284,9 @@ class EditProfileViewModel @Inject constructor(
 
     private val profileId: Long? = savedStateHandle.get<Long>("profileId")
     private val initialTunnelType: TunnelType = savedStateHandle.get<String>("tunnelType")
-        ?.let { TunnelType.fromValue(it) } ?: TunnelType.DNSTT
+        ?.let { TunnelType.fromValue(it) }
+        ?.takeIf { it.isAvailable() }
+        ?: TunnelType.DNSTT
 
     private val _uiState = MutableStateFlow(
         EditProfileUiState(profileId = profileId, tunnelType = initialTunnelType)
@@ -1305,6 +1308,11 @@ class EditProfileViewModel @Inject constructor(
     private fun validateProfile(forScanner: Boolean = false): Boolean {
         val state = _uiState.value
         var hasError = false
+
+        if (!state.tunnelType.isAvailable()) {
+            _uiState.value = _uiState.value.copy(error = "${state.tunnelType.displayName} is not supported in this build")
+            return false
+        }
 
         if (state.name.isBlank()) {
             _uiState.value = _uiState.value.copy(nameError = "Name is required")

@@ -8,6 +8,7 @@ import app.slipnet.domain.model.ResolverMode
 import app.slipnet.domain.model.ServerProfile
 import app.slipnet.domain.model.SshAuthType
 import app.slipnet.domain.model.TunnelType
+import app.slipnet.domain.model.isAvailable
 import app.slipnet.util.BundleCrypto
 import app.slipnet.util.LockPasswordUtil
 import javax.inject.Inject
@@ -180,7 +181,7 @@ class ConfigImporter @Inject constructor() {
             if (trimmedLine.startsWith(VLESS_SCHEME, ignoreCase = true)) {
                 val result = parseVlessUri(trimmedLine, index + 1)
                 when (result) {
-                    is ProfileParseResult.Success -> profiles.add(result.profile)
+                    is ProfileParseResult.Success -> addProfileIfAllowed(result.profile, index + 1, profiles, warnings)
                     is ProfileParseResult.Warning -> warnings.add(result.message)
                     is ProfileParseResult.Error -> warnings.add(result.message)
                 }
@@ -210,7 +211,7 @@ class ConfigImporter @Inject constructor() {
                         if (profile.boundDeviceId.isNotEmpty() && localDeviceId.isNotEmpty() && profile.boundDeviceId != localDeviceId) {
                             warnings.add("Line ${index + 1}: Profile is bound to a different device, skipping")
                         } else {
-                            profiles.add(profile)
+                            addProfileIfAllowed(profile, index + 1, profiles, warnings)
                             val version = decoded.split(FIELD_DELIMITER).firstOrNull()?.toIntOrNull()
                             if (version != null && version > CURRENT_MAX_VERSION) {
                                 warnings.add("Line ${index + 1}: Exported from a newer app version — some settings may be missing")
@@ -243,7 +244,7 @@ class ConfigImporter @Inject constructor() {
                     if (profile.boundDeviceId.isNotEmpty() && localDeviceId.isNotEmpty() && profile.boundDeviceId != localDeviceId) {
                         warnings.add("Line ${index + 1}: Profile is bound to a different device, skipping")
                     } else {
-                        profiles.add(profile)
+                        addProfileIfAllowed(profile, index + 1, profiles, warnings)
                         val version = decoded.split(FIELD_DELIMITER).firstOrNull()?.toIntOrNull()
                         if (version != null && version > CURRENT_MAX_VERSION) {
                             warnings.add("Line ${index + 1}: Exported from a newer app version — some settings may be missing")
@@ -264,6 +265,19 @@ class ConfigImporter @Inject constructor() {
         }
 
         return ImportResult.Success(profiles, warnings)
+    }
+
+    private fun addProfileIfAllowed(
+        profile: ServerProfile,
+        lineNum: Int,
+        profiles: MutableList<ServerProfile>,
+        warnings: MutableList<String>
+    ) {
+        if (profile.tunnelType.isAvailable()) {
+            profiles.add(profile)
+        } else {
+            warnings.add("Line $lineNum: ${profile.tunnelType.displayName} is not supported in this build, skipping")
+        }
     }
 
     private sealed class ProfileParseResult {

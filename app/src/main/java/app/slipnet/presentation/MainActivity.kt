@@ -14,12 +14,15 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import androidx.navigation.compose.rememberNavController
 import app.slipnet.data.local.datastore.DarkMode
+import app.slipnet.data.local.datastore.AppLanguage
 import app.slipnet.data.local.datastore.PreferencesDataStore
+import app.slipnet.presentation.localization.LocalAppLanguage
 import app.slipnet.presentation.navigation.NavGraph
 import app.slipnet.presentation.theme.SlipstreamTheme
 import app.slipnet.service.VpnConnectionManager
@@ -71,14 +74,17 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             val darkMode by preferencesDataStore.darkMode.collectAsState(initial = DarkMode.SYSTEM)
+            val appLanguage by preferencesDataStore.appLanguage.collectAsState(initial = AppLanguage.RUSSIAN)
 
-            SlipstreamTheme(darkMode = darkMode) {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
-                ) {
-                    val navController = rememberNavController()
-                    NavGraph(navController = navController)
+            CompositionLocalProvider(LocalAppLanguage provides appLanguage) {
+                SlipstreamTheme(darkMode = darkMode) {
+                    Surface(
+                        modifier = Modifier.fillMaxSize(),
+                        color = MaterialTheme.colorScheme.background
+                    ) {
+                        val navController = rememberNavController()
+                        NavGraph(navController = navController)
+                    }
                 }
             }
         }

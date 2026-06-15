@@ -44,7 +44,7 @@ import app.slipnet.domain.model.PingResult
 import app.slipnet.domain.model.ServerProfile
 import app.slipnet.domain.model.TunnelType
 import app.slipnet.domain.model.isAvailable
-import app.slipnet.presentation.profiles.EditProfileViewModel
+import app.slipnet.presentation.localization.tx
 import app.slipnet.presentation.theme.ConnectedGreen
 import app.slipnet.presentation.theme.ConnectingOrange
 import app.slipnet.presentation.theme.DisconnectedRed
@@ -145,7 +145,7 @@ fun ProfileListItem(
                     if (profile.isExpired) {
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "Expired",
+                            text = tx("Expired", "Истек"),
                             style = MaterialTheme.typography.labelSmall,
                             color = DisconnectedRed,
                             modifier = Modifier
@@ -159,7 +159,7 @@ fun ProfileListItem(
                     if (!profile.tunnelType.isAvailable()) {
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "Not available in Lite",
+                            text = tx("Not available in Lite", "Недоступно в Lite"),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier
@@ -173,7 +173,7 @@ fun ProfileListItem(
                     if (isConnected) {
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Connected",
+                            text = tx("Connected", "Подключено"),
                             style = MaterialTheme.typography.labelSmall,
                             color = ConnectedGreen,
                             modifier = Modifier
@@ -186,7 +186,7 @@ fun ProfileListItem(
                     } else if (isSelected) {
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Selected",
+                            text = tx("Selected", "Выбрано"),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier
@@ -278,7 +278,7 @@ fun ProfileListItem(
                 // Subtitle: server/domain info (hidden when locked)
                 Text(
                     text = if (profile.isLocked) {
-                        "Locked"
+                        tx("Locked", "Заблокировано")
                     } else {
                         when (profile.tunnelType) {
                             TunnelType.DOH -> DOH_SERVERS.firstOrNull { it.url == profile.dohUrl }?.name
@@ -288,7 +288,7 @@ fun ProfileListItem(
                             TunnelType.NOIZDNS_SSH -> "${profile.domain} via SSH"
                             TunnelType.NAIVE_SSH -> "${profile.domain}:${profile.naivePort} via SSH"
                             TunnelType.NAIVE -> "${profile.domain}:${profile.naivePort}"
-                            TunnelType.SNOWFLAKE -> "Tor Network"
+                            TunnelType.SNOWFLAKE -> tx("Unsupported profile", "Неподдерживаемый профиль")
                             else -> profile.domain
                         }
                     },
@@ -301,7 +301,7 @@ fun ProfileListItem(
                 // Detail line: tunnel type
                 Text(
                     text = when (profile.tunnelType) {
-                        TunnelType.SNOWFLAKE -> EditProfileViewModel.detectBridgeType(profile.torBridgeLines).displayName
+                        TunnelType.SNOWFLAKE -> tx("Unsupported", "Не поддерживается")
                         else -> profile.tunnelType.displayName
                     },
                     style = MaterialTheme.typography.bodySmall,
@@ -321,7 +321,7 @@ fun ProfileListItem(
                 ) {
                     Icon(
                         imageVector = Icons.Default.Edit,
-                        contentDescription = "Edit",
+                            contentDescription = tx("Edit", "Изменить"),
                         modifier = Modifier.size(18.dp),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -335,7 +335,7 @@ fun ProfileListItem(
                     ) {
                         Icon(
                             imageVector = Icons.Default.MoreVert,
-                            contentDescription = "More options",
+                            contentDescription = tx("More options", "Еще"),
                             modifier = Modifier.size(18.dp),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -346,7 +346,7 @@ fun ProfileListItem(
                         onDismissRequest = { showExportMenu = false }
                     ) {
                         DropdownMenuItem(
-                            text = { Text(if (profile.isPinned) "Unpin" else "Pin to top") },
+                            text = { Text(if (profile.isPinned) tx("Unpin", "Открепить") else tx("Pin to top", "Закрепить сверху")) },
                             onClick = {
                                 showExportMenu = false
                                 onPinClick()
@@ -364,7 +364,7 @@ fun ProfileListItem(
                         )
                         if (!profile.isLocked || profile.allowSharing) {
                             DropdownMenuItem(
-                                text = { Text("Export") },
+                                text = { Text(tx("Export", "Экспорт")) },
                                 onClick = {
                                     showExportMenu = false
                                     onExportClick()
@@ -374,7 +374,7 @@ fun ProfileListItem(
                                 }
                             )
                             DropdownMenuItem(
-                                text = { Text("Share QR Code") },
+                                text = { Text(tx("Share QR Code", "Поделиться QR")) },
                                 onClick = {
                                     showExportMenu = false
                                     onShareQrClick()
@@ -385,7 +385,7 @@ fun ProfileListItem(
                             )
                         }
                         DropdownMenuItem(
-                            text = { Text("Real Ping") },
+                            text = { Text(tx("Real Ping", "Реальный ping")) },
                             onClick = {
                                 showExportMenu = false
                                 onPingClick()
@@ -405,7 +405,7 @@ fun ProfileListItem(
                 ) {
                     Icon(
                         imageVector = Icons.Default.Delete,
-                        contentDescription = "Delete",
+                        contentDescription = tx("Delete", "Удалить"),
                         modifier = Modifier.size(18.dp),
                         tint = if (!isConnected)
                             MaterialTheme.colorScheme.onSurfaceVariant

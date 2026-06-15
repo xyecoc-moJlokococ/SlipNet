@@ -1,7 +1,5 @@
 package app.slipnet.domain.model
 
-import app.slipnet.BuildConfig
-
 data class ServerProfile(
     val id: Long = 0,
     val name: String,
@@ -207,8 +205,11 @@ enum class TunnelType(val value: String, val displayName: String) {
 }
 
 fun TunnelType.isAvailable(): Boolean = when (this) {
-    TunnelType.SNOWFLAKE -> BuildConfig.INCLUDE_TOR
-    TunnelType.NAIVE, TunnelType.NAIVE_SSH -> BuildConfig.INCLUDE_NAIVE
+    TunnelType.NOIZDNS,
+    TunnelType.NOIZDNS_SSH,
+    TunnelType.SNOWFLAKE,
+    TunnelType.NAIVE,
+    TunnelType.NAIVE_SSH -> false
     else -> true
 }
 

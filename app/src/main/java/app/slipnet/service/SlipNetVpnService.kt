@@ -70,7 +70,7 @@ class SlipNetVpnService : VpnService() {
         const val EXTRA_CHAIN_ID = "chain_id"
         const val EXTRA_BOOT_TRIGGERED = "boot_triggered"
 
-        private const val VPN_MTU = 1280
+        private const val VPN_MTU = 1500
         private const val VPN_ADDRESS = "10.255.255.1"
         private const val VPN_ROUTE = "0.0.0.0"
         private const val DEFAULT_DNS = "8.8.8.8"

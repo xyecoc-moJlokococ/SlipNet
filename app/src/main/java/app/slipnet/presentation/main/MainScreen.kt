@@ -71,7 +71,6 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.ui.text.input.VisualTransformation
@@ -140,9 +139,9 @@ import app.slipnet.domain.model.TrafficStats
 import app.slipnet.presentation.common.components.AboutDialogContent
 import app.slipnet.presentation.common.components.ProfileListItem
 import app.slipnet.presentation.common.components.QrCodeDialog
-import app.slipnet.presentation.common.icons.TorIcon
 import app.slipnet.presentation.common.icons.VlessIcon
 import app.slipnet.presentation.home.DebugLogSheet
+import app.slipnet.presentation.localization.tx
 import app.slipnet.presentation.scanner.QrScannerActivity
 import androidx.compose.material.icons.filled.Timer
 import app.slipnet.presentation.theme.ConnectedGreen
@@ -328,9 +327,6 @@ fun MainScreen(
 
     val navBarPadding = WindowInsets.navigationBars.asPaddingValues()
 
-    val showTorProgressFab = uiState.connectionState is ConnectionState.Connecting &&
-            uiState.snowflakeBootstrapProgress in 0..99
-
     val sleepTimerActive = uiState.connectionState is ConnectionState.Connected &&
             uiState.sleepTimerRemainingSeconds > 0
 
@@ -343,7 +339,6 @@ fun MainScreen(
             uiState.connectionState is ConnectionState.Connected && sleepTimerActive -> 52.dp
             uiState.connectionState is ConnectionState.Connected && dnsWarningActive -> 48.dp
             uiState.connectionState is ConnectionState.Connected -> 28.dp
-            showTorProgressFab -> 30.dp
             else -> 0.dp
         },
         animationSpec = tween(300),
@@ -583,7 +578,6 @@ fun MainScreen(
                 ConnectFab(
                     connectionState = uiState.connectionState,
                     hasProfile = uiState.activeProfile != null || uiState.activeChain != null || uiState.profiles.isNotEmpty(),
-                    snowflakeBootstrapProgress = uiState.snowflakeBootstrapProgress,
                     onToggleConnection = { requestConnectOrToggle() },
                     modifier = Modifier.padding(
                         bottom = 24.dp + navBarPadding.calculateBottomPadding() + fabExtraPadding,
@@ -618,12 +612,12 @@ fun MainScreen(
                             selected = selectedTab == 0,
                             onClick = { selectedTab = 0 },
                             shape = SegmentedButtonDefaults.itemShape(0, 2)
-                        ) { Text("Profiles") }
+                        ) { Text(tx("Profiles", "Профили")) }
                         SegmentedButton(
                             selected = selectedTab == 1,
                             onClick = { selectedTab = 1 },
                             shape = SegmentedButtonDefaults.itemShape(1, 2)
-                        ) { Text("Chains") }
+                        ) { Text(tx("Chains", "Цепочки")) }
                     }
                 }
 
@@ -699,12 +693,12 @@ fun MainScreen(
                                 modifier = Modifier.padding(32.dp)
                             ) {
                                 Text(
-                                    text = "No profiles yet",
+                                    text = tx("No profiles yet", "Профилей пока нет"),
                                     style = MaterialTheme.typography.bodyLarge,
                                     fontWeight = FontWeight.Medium
                                 )
                                 Text(
-                                    text = "Tap + to add your first profile",
+                                    text = tx("Tap + to add your first profile", "Нажми +, чтобы добавить первый профиль"),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -821,7 +815,6 @@ fun MainScreen(
                 activeProfile = uiState.activeProfile,
                 activeChain = uiState.activeChain,
                 isProxyOnly = uiState.proxyOnlyMode,
-                snowflakeBootstrapProgress = uiState.snowflakeBootstrapProgress,
                 uploadSpeed = uiState.uploadSpeed,
                 downloadSpeed = uiState.downloadSpeed,
                 totalUpload = uiState.trafficStats.bytesSent,
@@ -844,7 +837,7 @@ fun MainScreen(
                     dragHandle = null
                 ) {
                     Text(
-                        text = "New Profile",
+                        text = tx("New Profile", "Новый профиль"),
                         style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 8.dp)
                     )
@@ -865,15 +858,6 @@ fun MainScreen(
                             onClick = {
                                 showAddMenu = false
                                 onNavigateToAddProfile("dnstt")
-                            }
-                        )
-                        AddMenuGridItem(
-                            modifier = tileMod,
-                            icon = Icons.Default.VisibilityOff,
-                            title = "NoizDNS",
-                            onClick = {
-                                showAddMenu = false
-                                onNavigateToAddProfile(TunnelType.NOIZDNS.value)
                             }
                         )
                         AddMenuGridItem(
@@ -930,28 +914,6 @@ fun MainScreen(
                                 onNavigateToAddProfile("vless")
                             }
                         )
-                        if (BuildConfig.INCLUDE_NAIVE) {
-                            AddMenuGridItem(
-                                modifier = tileMod,
-                                icon = Icons.Default.Shield,
-                                title = "NaiveProxy",
-                                onClick = {
-                                    showAddMenu = false
-                                    onNavigateToAddProfile("naive")
-                                }
-                            )
-                        }
-                        if (BuildConfig.INCLUDE_TOR) {
-                            AddMenuGridItem(
-                                modifier = tileMod,
-                                icon = TorIcon,
-                                title = "Tor",
-                                onClick = {
-                                    showAddMenu = false
-                                    onNavigateToAddProfile("snowflake")
-                                }
-                            )
-                        }
                     }
                     HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
                     AddMenuOption(
@@ -989,20 +951,23 @@ fun MainScreen(
     if (showLiteInfoDialog) {
         AlertDialog(
             onDismissRequest = { showLiteInfoDialog = false },
-            title = { Text("SlipNet Lite") },
+            title = { Text(tx("SlipNet Lite", "SlipNet Lite")) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("SlipNet Lite is a lightweight version with a smaller app size.")
-                    Text("Included protocols:", fontWeight = FontWeight.Bold)
+                    Text(tx(
+                        "SlipNet Lite is a lightweight version with a smaller app size.",
+                        "SlipNet Lite - облегченная версия с меньшим размером приложения."
+                    ))
+                    Text(tx("Included protocols:", "Доступные протоколы:"), fontWeight = FontWeight.Bold)
                     Text("• Slipstream / Slipstream + SSH")
                     Text("• DNSTT / DNSTT + SSH")
-                    Text("• NoizDNS / NoizDNS + SSH")
                     Text("• VayDNS / VayDNS + SSH")
                     Text("• SSH")
-                    Text("• DOH (DNS over HTTPS)")
-                    Text("Not included (full version only):", fontWeight = FontWeight.Bold)
-                    Text("• Tor (Snowflake)")
-                    Text("• NaïveProxy / NaïveProxy + SSH")
+                    Text(tx("• DOH (DNS over HTTPS)", "• DOH (DNS over HTTPS)"))
+                    Text("• SOCKS5")
+                    Text("• VLESS")
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                    AboutDialogContent()
                 }
             },
             confirmButton = {
@@ -1719,20 +1684,6 @@ fun MainScreen(
         )
     }
 
-    // First launch About dialog
-    if (uiState.showFirstLaunchAbout) {
-        AlertDialog(
-            onDismissRequest = { viewModel.dismissFirstLaunchAbout() },
-            title = { Text("Welcome to SlipNet") },
-            text = { AboutDialogContent() },
-            confirmButton = {
-                TextButton(onClick = { viewModel.dismissFirstLaunchAbout() }) {
-                    Text("Get Started")
-                }
-            }
-        )
-    }
-
     // Update available dialog
     uiState.availableUpdate?.let { update ->
         val context = LocalContext.current
@@ -1913,7 +1864,6 @@ private fun ConnectionStatusStrip(
     activeProfile: ServerProfile?,
     activeChain: ProfileChain? = null,
     isProxyOnly: Boolean,
-    snowflakeBootstrapProgress: Int,
     uploadSpeed: Long = 0,
     downloadSpeed: Long = 0,
     totalUpload: Long = 0,
@@ -1928,8 +1878,6 @@ private fun ConnectionStatusStrip(
     val isConnecting = connectionState is ConnectionState.Connecting ||
             connectionState is ConnectionState.Disconnecting
     val isError = connectionState is ConnectionState.Error
-    val showTorProgress = connectionState is ConnectionState.Connecting &&
-            snowflakeBootstrapProgress in 0..99
     val showDnsPoolProgress = dnsPoolScan.isRunning && dnsPoolScan.total > 0
 
     val statusColor by animateColorAsState(
@@ -1971,12 +1919,12 @@ private fun ConnectionStatusStrip(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = when {
-                            isConnected && isProxyOnly -> "Proxy Active"
-                            isConnected -> "Connected"
-                            connectionState is ConnectionState.Connecting -> "Connecting..."
-                            connectionState is ConnectionState.Disconnecting -> "Disconnecting..."
-                            isError -> "Connection Failed"
-                            else -> "Not Connected"
+                            isConnected && isProxyOnly -> tx("Proxy Active", "Прокси активен")
+                            isConnected -> tx("Connected", "Подключено")
+                            connectionState is ConnectionState.Connecting -> tx("Connecting...", "Подключение...")
+                            connectionState is ConnectionState.Disconnecting -> tx("Disconnecting...", "Отключение...")
+                            isError -> tx("Connection Failed", "Ошибка подключения")
+                            else -> tx("Not Connected", "Не подключено")
                         },
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
@@ -1991,7 +1939,7 @@ private fun ConnectionStatusStrip(
                                 connectionState.message
                             activeChain != null -> activeChain.name
                             activeProfile != null -> activeProfile.name
-                            else -> "No profile selected"
+                            else -> tx("No profile selected", "Профиль не выбран")
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = if (isError) DisconnectedRed
@@ -2137,37 +2085,6 @@ private fun ConnectionStatusStrip(
                     }
                 }
             }
-
-            // Tor bootstrap progress
-            AnimatedVisibility(
-                visible = showTorProgress,
-                enter = expandVertically(animationSpec = tween(300)) + fadeIn(animationSpec = tween(300)),
-                exit = shrinkVertically(animationSpec = tween(200)) + fadeOut(animationSpec = tween(200))
-            ) {
-                Column {
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        LinearProgressIndicator(
-                            progress = { snowflakeBootstrapProgress / 100f },
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(6.dp)
-                                .clip(RoundedCornerShape(3.dp)),
-                            color = ConnectingOrange,
-                            trackColor = ConnectingOrange.copy(alpha = 0.2f),
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Text(
-                            text = "Tor: $snowflakeBootstrapProgress%",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = ConnectingOrange
-                        )
-                    }
-                }
-            }
         }
     }
 }
@@ -2182,7 +2099,6 @@ private fun formatCountdown(totalSeconds: Int): String {
 private fun ConnectFab(
     connectionState: ConnectionState,
     hasProfile: Boolean,
-    snowflakeBootstrapProgress: Int,
     onToggleConnection: () -> Unit,
     modifier: Modifier = Modifier
 ) {

@@ -3,6 +3,7 @@ package app.slipnet.presentation.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.slipnet.data.local.datastore.DarkMode
+import app.slipnet.data.local.datastore.AppLanguage
 import app.slipnet.data.local.datastore.DnsWorkerMode
 import app.slipnet.data.local.datastore.DomainRoutingMode
 import app.slipnet.data.local.datastore.PreferencesDataStore
@@ -19,6 +20,7 @@ import javax.inject.Inject
 
 data class SettingsUiState(
     val autoConnectOnBoot: Boolean = false,
+    val appLanguage: AppLanguage = AppLanguage.RUSSIAN,
     val darkMode: DarkMode = DarkMode.SYSTEM,
     val debugLogging: Boolean = false,
     val isLoading: Boolean = true,
@@ -40,7 +42,7 @@ data class SettingsUiState(
     // Network Settings
     val disableQuic: Boolean = true,
     val blockIpv6: Boolean = true,
-    val vpnMtu: Int = 1280,
+    val vpnMtu: Int = PreferencesDataStore.DEFAULT_MTU,
     // Bandwidth Limiting (0 = unlimited, KB/s)
     val uploadLimitKbps: Int = 0,
     val downloadLimitKbps: Int = 0,
@@ -102,6 +104,7 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             val mainFlow = combine(
                 preferencesDataStore.autoConnectOnBoot,
+                preferencesDataStore.appLanguage,
                 preferencesDataStore.darkMode,
                 preferencesDataStore.debugLogging,
                 preferencesDataStore.proxyListenAddress,
@@ -109,7 +112,7 @@ class SettingsViewModel @Inject constructor(
                 preferencesDataStore.disableQuic,
                 preferencesDataStore.vpnMtu
             ) { values ->
-                arrayOf(values[0], values[1], values[2], values[3], values[4], values[5], values[6])
+                arrayOf(values[0], values[1], values[2], values[3], values[4], values[5], values[6], values[7])
             }
 
             data class SshSettings(val cipher: SshCipher, val compression: Boolean, val maxChannels: Int, val maxChannelsIsCustom: Boolean, val preventDnsFallback: Boolean)
@@ -185,11 +188,12 @@ class SettingsViewModel @Inject constructor(
             val baseFlow = combine(mainFlow, sshFlow, splitFlow, proxyOnlyFlow, httpProxyFlow) { main, ssh, split, proxyOnlySettings, httpProxy ->
                 SettingsUiState(
                     autoConnectOnBoot = main[0] as Boolean,
-                    darkMode = main[1] as DarkMode,
-                    debugLogging = main[2] as Boolean,
+                    appLanguage = main[1] as AppLanguage,
+                    darkMode = main[2] as DarkMode,
+                    debugLogging = main[3] as Boolean,
                     isLoading = false,
-                    proxyListenAddress = main[3] as String,
-                    proxyListenPort = main[4] as Int,
+                    proxyListenAddress = main[4] as String,
+                    proxyListenPort = main[5] as Int,
                     proxyOnlyMode = proxyOnlySettings.proxyOnly,
                     killSwitch = proxyOnlySettings.killSwitch,
                     autoReconnect = proxyOnlySettings.autoReconnect,
@@ -198,8 +202,8 @@ class SettingsViewModel @Inject constructor(
                     httpProxyEnabled = httpProxy.first,
                     httpProxyPort = httpProxy.second,
                     appendHttpProxyToVpn = httpProxy.third,
-                    disableQuic = main[5] as Boolean,
-                    vpnMtu = main[6] as Int,
+                    disableQuic = main[6] as Boolean,
+                    vpnMtu = main[7] as Int,
                     splitTunnelingEnabled = split.first,
                     splitTunnelingMode = split.second,
                     splitTunnelingApps = split.third,
@@ -279,6 +283,12 @@ class SettingsViewModel @Inject constructor(
     fun setAutoConnectOnBoot(enabled: Boolean) {
         viewModelScope.launch {
             preferencesDataStore.setAutoConnectOnBoot(enabled)
+        }
+    }
+
+    fun setAppLanguage(language: AppLanguage) {
+        viewModelScope.launch {
+            preferencesDataStore.setAppLanguage(language)
         }
     }
 

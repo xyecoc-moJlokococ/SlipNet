@@ -2,6 +2,7 @@ package app.slipnet.tunnel
 
 import android.net.VpnService
 import app.slipnet.util.AppLog as Log
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Bridge to the Rust slipstream client library.
@@ -32,6 +33,9 @@ object SlipstreamBridge {
     // skip the protect call entirely and tell the Rust client "success".
     @Volatile
     var proxyOnlyMode = false
+    private val protectSuccessCount = AtomicLong(0)
+    private val protectFailureCount = AtomicLong(0)
+    private val lastProtectMs = AtomicLong(0)
 
     init {
         try {
@@ -60,14 +64,21 @@ object SlipstreamBridge {
      */
     @JvmStatic
     fun protectSocket(fd: Int): Boolean {
+        lastProtectMs.set(System.currentTimeMillis())
+        if (proxyOnlyMode) {
+            protectSuccessCount.incrementAndGet()
+            return true
+        }
         if (proxyOnlyMode) return true // No VPN interface — protection not needed
         val service = vpnServiceRef
         if (service == null) {
+            protectFailureCount.incrementAndGet()
             Log.e(TAG, "Cannot protect socket: VpnService not available")
             return false
         }
         val result = service.protect(fd)
         if (result) {
+            protectSuccessCount.incrementAndGet()
             Log.d(TAG, "Protected socket fd=$fd")
             return true
         }
@@ -78,6 +89,7 @@ object SlipstreamBridge {
         // interface exists. That is still safe here because SlipNet excludes its
         // own package from the VPN with addDisallowedApplication() when the
         // interface is established.
+        protectFailureCount.incrementAndGet()
         Log.w(TAG, "VpnService.protect($fd) returned false; continuing because SlipNet self-excludes from VPN")
         return true
     }
@@ -131,26 +143,15 @@ object SlipstreamBridge {
             currentOwner = null
         }
 
-        // Wait briefly for port to become free, then fall back to alternative ports.
+        // Preferred port leaks must be visible; do not silently fall back.
         // Keep this short (3s) since we have port fallback — no need to block the user.
-        var actualPort = tcpListenPort
-        if (!waitForPortFree(actualPort, 3000)) {
+        val actualPort = tcpListenPort
+        if (!waitForPortFree(actualPort, 5000)) {
+            val message = "Port $actualPort still in use after native stop; refusing fallback (${dumpState("port-leak")})"
+            Log.e(TAG, message)
+            return Result.failure(IllegalStateException(message))
             // Preferred port is stuck (native thread didn't release it).
             // Try alternative ports so the user isn't blocked.
-            Log.w(TAG, "Port $actualPort stuck, trying alternatives...")
-            var found = false
-            for (offset in 10..50 step 10) {
-                val alt = tcpListenPort + offset
-                if (!isPortInUse(alt)) {
-                    Log.i(TAG, "Using alternative port $alt (preferred $tcpListenPort was stuck)")
-                    actualPort = alt
-                    found = true
-                    break
-                }
-            }
-            if (!found) {
-                return Result.failure(RuntimeException("Port $tcpListenPort is already in use"))
-            }
         }
 
         return try {
@@ -200,12 +201,8 @@ object SlipstreamBridge {
                     }
                     // Only retry on a different port if this one is actually still held.
                     if (isPortInUse(actualPort)) {
-                        Log.w(TAG, "Port $actualPort confirmed in use after native failure, trying alternatives...")
-                        retryOnAlternatePort(
-                            tcpListenPort, actualPort, domain, resolvers, congestionControl,
-                            keepAliveInterval, tcpListenHost, gsoEnabled, debugPoll, debugStreams,
-                            idlePollIntervalMs, idleTimeoutMs, nativeResolverTransport, owner
-                        )
+                        val detail = nativeError ?: "native client exited before listener ready"
+                        startFailure(IllegalStateException("Port $actualPort still in use after native startup failure; refusing fallback: $detail"))
                     } else {
                         val detail = nativeError ?: "unknown startup error"
                         startFailure(RuntimeException("Failed to start client: $detail"))
@@ -334,8 +331,10 @@ object SlipstreamBridge {
             // Native stop waits up to 3s internally. Brief check — don't block disconnect.
             // If port is still stuck, the next startClient() has port fallback.
             if (port > 0 && isPortInUse(port)) {
-                Log.w(TAG, "Port $port still in use after native stop, waiting briefly...")
-                waitForPortFree(port, 1000)
+                Log.w(TAG, "Port $port still in use after native stop, waiting for cleanup...")
+                if (!waitForPortFree(port, 5000)) {
+                    Log.e(TAG, "Port $port still in use after native stop; leak suspected (${dumpState("stop-leak")})")
+                }
             }
             Log.i(TAG, "Slipstream client stopped (port $port free: ${port <= 0 || !isPortInUse(port)})")
         } catch (e: Exception) {
@@ -381,6 +380,17 @@ object SlipstreamBridge {
      * Get the port the slipstream client is listening on.
      */
     fun getClientPort(): Int = currentPort
+
+    fun dumpState(reason: String = "snapshot"): String {
+        val running = isClientRunning()
+        val quicReady = isQuicReady()
+        val port = currentPort
+        val portInUse = port > 0 && isPortInUse(port)
+        return "reason=$reason port=$port portInUse=$portInUse nativeRunning=$running " +
+            "quicReady=$quicReady owner=${currentOwner ?: "none"} proxyOnly=$proxyOnlyMode " +
+            "protectSuccess=${protectSuccessCount.get()} protectFailure=${protectFailureCount.get()} " +
+            "lastProtectMs=${lastProtectMs.get()}"
+    }
 
     /**
      * Check if a port is currently in use (bound by another socket).

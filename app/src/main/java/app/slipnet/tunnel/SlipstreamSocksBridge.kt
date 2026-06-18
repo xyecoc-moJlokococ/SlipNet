@@ -10,6 +10,7 @@ import java.io.SequenceInputStream
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
@@ -74,6 +75,8 @@ object SlipstreamSocksBridge {
     private val connectionThreads = CopyOnWriteArrayList<Thread>()
     // Track all remote sockets (connections to Slipstream) for explicit cleanup
     private val remoteSockets = CopyOnWriteArrayList<Socket>()
+    // Track accepted localhost sockets too; interrupt() does not wake blocking socket I/O.
+    private val clientSockets = CopyOnWriteArrayList<Socket>()
 
     // Tunnel-level byte counters (only counts data actually relayed through the tunnel)
     // carriedTx/Rx accumulate totals across reconnects so stats don't reset to zero.
@@ -116,7 +119,12 @@ object SlipstreamSocksBridge {
         return false
     }
 
-    private fun recordDnsSuccess() { consecutiveFailures.set(0) }
+    private val lastDnsSuccessMs = AtomicLong(0)
+
+    private fun recordDnsSuccess() {
+        consecutiveFailures.set(0)
+        lastDnsSuccessMs.set(System.currentTimeMillis())
+    }
     private fun recordDnsFailure() {
         if (consecutiveFailures.incrementAndGet() >= CIRCUIT_BREAKER_THRESHOLD) {
             circuitOpenUntil = System.currentTimeMillis() + CIRCUIT_BREAKER_COOLDOWN_MS
@@ -133,9 +141,26 @@ object SlipstreamSocksBridge {
     private const val MAX_CONCURRENT_CONNECTS = 8
     private const val CONNECT_CIRCUIT_THRESHOLD = 3
     private const val CONNECT_CIRCUIT_COOLDOWN_MS = 5000L
-    private val connectSemaphore = Semaphore(MAX_CONCURRENT_CONNECTS)
+    @Volatile private var connectSemaphore = Semaphore(MAX_CONCURRENT_CONNECTS)
     private val connectFailures = AtomicInteger(0)
     @Volatile private var connectCircuitOpenUntil: Long = 0
+    private val nextConnectSlotId = AtomicLong(1)
+    private val connectSlots = ConcurrentHashMap<Long, ConnectSlot>()
+    private val activeFwdUdpSessions = AtomicInteger(0)
+
+    private data class ConnectSlot(
+        val id: Long,
+        val dest: String,
+        val startedAtMs: Long = System.currentTimeMillis(),
+        val lastActivityMs: AtomicLong = AtomicLong(startedAtMs),
+        val bytesIn: AtomicLong = AtomicLong(0),
+        val bytesOut: AtomicLong = AtomicLong(0)
+    )
+
+    private enum class RelayDirection {
+        CLIENT_TO_REMOTE,
+        REMOTE_TO_CLIENT
+    }
 
     private fun isConnectCircuitOpen(): Boolean {
         if (System.currentTimeMillis() < connectCircuitOpenUntil) return true
@@ -160,6 +185,40 @@ object SlipstreamSocksBridge {
         }
     }
 
+    private fun registerConnectSlot(destHost: String, destPort: Int): ConnectSlot {
+        val slot = ConnectSlot(
+            id = nextConnectSlotId.getAndIncrement(),
+            dest = "$destHost:$destPort"
+        )
+        connectSlots[slot.id] = slot
+        logd("CONNECT slot ${slot.id} opened dest=${slot.dest} active=${connectSlots.size}")
+        return slot
+    }
+
+    private fun closeConnectSlot(slot: ConnectSlot?, reason: String, forceClosed: Boolean = false) {
+        if (slot == null) return
+        val removed = connectSlots.remove(slot.id) ?: return
+        val now = System.currentTimeMillis()
+        Log.i(
+            TAG,
+            "CONNECT slot ${removed.id} closed reason=$reason forceClosed=$forceClosed " +
+                "ageMs=${now - removed.startedAtMs} idleMs=${now - removed.lastActivityMs.get()} " +
+                "bytesOut=${removed.bytesOut.get()} bytesIn=${removed.bytesIn.get()} active=${connectSlots.size}"
+        )
+    }
+
+    private fun forceCloseActiveConnectSlots(reason: String) {
+        for (slot in connectSlots.values.toList()) {
+            closeConnectSlot(slot, reason, forceClosed = true)
+        }
+    }
+
+    private fun stuckConnectSlots(
+        now: Long = System.currentTimeMillis(),
+        thresholdMs: Long = 5_000L
+    ): List<ConnectSlot> =
+        connectSlots.values.filter { slot -> now - slot.lastActivityMs.get() > thresholdMs }
+
     /**
      * Returns true when CONNECT slots are actually stuck — no success for
      * [CAPACITY_EXHAUSTION_THRESHOLD_MS] AND at least one semaphore slot is in use.
@@ -170,7 +229,30 @@ object SlipstreamSocksBridge {
         val last = lastConnectSuccessMs.get()
         if (last == 0L) return false
         if (connectSemaphore.availablePermits() == MAX_CONCURRENT_CONNECTS) return false
-        return System.currentTimeMillis() - last > CAPACITY_EXHAUSTION_THRESHOLD_MS
+        val exhausted = System.currentTimeMillis() - last > CAPACITY_EXHAUSTION_THRESHOLD_MS
+        if (exhausted) {
+            Log.w(TAG, "Bridge capacity exhausted: ${dumpState("capacity")}")
+        }
+        return exhausted
+    }
+
+    fun dumpState(reason: String = "snapshot"): String {
+        val now = System.currentTimeMillis()
+        val stuckSlots = stuckConnectSlots(now)
+        val slotSummary = connectSlots.values
+            .sortedByDescending { now - it.lastActivityMs.get() }
+            .take(8)
+            .joinToString(prefix = "[", postfix = "]") { slot ->
+                "{id=${slot.id},dest=${slot.dest},ageMs=${now - slot.startedAtMs},idleMs=${now - slot.lastActivityMs.get()},out=${slot.bytesOut.get()},in=${slot.bytesIn.get()}}"
+            }
+        return "reason=$reason running=${running.get()} slipstream=$slipstreamHost:$slipstreamPort " +
+            "activeConnections=${activeConnections.get()} handlerThreads=${connectionThreads.count { it.isAlive }} " +
+            "clientSockets=${clientSockets.size} remoteSockets=${remoteSockets.size} " +
+            "connectSlots=${connectSlots.size} stuckSlotsOver5s=${stuckSlots.size} " +
+            "connectPermits=${connectSemaphore.availablePermits()}/$MAX_CONCURRENT_CONNECTS " +
+            "connectCircuitOpen=${now < connectCircuitOpenUntil} dnsCircuitOpen=${now < circuitOpenUntil} " +
+            "activeFwdUdp=${activeFwdUdpSessions.get()} lastDnsSuccessMs=${lastDnsSuccessMs.get()} " +
+            "tx=${tunnelTxBytes.get()} rx=${tunnelRxBytes.get()} slots=$slotSummary"
     }
 
     fun start(
@@ -208,6 +290,10 @@ object SlipstreamSocksBridge {
         connectFailures.set(0)
         connectCircuitOpenUntil = 0
         lastConnectSuccessMs.set(0)
+        lastDnsSuccessMs.set(0)
+        activeFwdUdpSessions.set(0)
+        connectSlots.clear()
+        connectSemaphore = Semaphore(MAX_CONCURRENT_CONNECTS)
         // Resize worker pool to configured size
         val poolSize = dnsPoolSize
         dnsWorkers = arrayOfNulls(poolSize)
@@ -248,10 +334,16 @@ object SlipstreamSocksBridge {
     }
 
     fun stop() {
-        if (!running.getAndSet(false) && serverSocket == null) {
+        if (!running.getAndSet(false) &&
+            serverSocket == null &&
+            clientSockets.isEmpty() &&
+            remoteSockets.isEmpty() &&
+            connectionThreads.isEmpty() &&
+            connectSlots.isEmpty()
+        ) {
             return
         }
-        logd("Stopping bridge...")
+        Log.i(TAG, "Stopping bridge: ${dumpState("before-stop")}")
 
         try { serverSocket?.close() } catch (_: Exception) {}
         serverSocket = null
@@ -266,8 +358,12 @@ object SlipstreamSocksBridge {
         }
 
         // Stop DNS keepalive
-        dnsKeepaliveThread?.interrupt()
+        val oldDnsKeepalive = dnsKeepaliveThread
+        oldDnsKeepalive?.interrupt()
         dnsKeepaliveThread = null
+        try { oldDnsKeepalive?.join(1000) } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
 
         // Close all DNS workers (connections to Slipstream port)
         for (i in 0 until dnsPoolSize) {
@@ -278,18 +374,38 @@ object SlipstreamSocksBridge {
             }
         }
 
+        // Close accepted local sockets first; this wakes handler threads blocked
+        // in client InputStream/OutputStream operations.
+        for (sock in clientSockets) {
+            try { sock.close() } catch (_: Exception) {}
+        }
+        clientSockets.clear()
+
         // Close all remote sockets (CONNECT chains to Slipstream port)
         for (sock in remoteSockets) {
             try { sock.close() } catch (_: Exception) {}
         }
         remoteSockets.clear()
 
+        val oldThreads = connectionThreads.toList()
         for (thread in connectionThreads) {
             thread.interrupt()
         }
+        for (thread in oldThreads) {
+            try { thread.join(2000) } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                break
+            }
+        }
+        val aliveHandlers = oldThreads.count { it.isAlive }
+        if (aliveHandlers > 0) {
+            Log.w(TAG, "Bridge stop: $aliveHandlers handler thread(s) still alive after socket close")
+        }
         connectionThreads.clear()
+        forceCloseActiveConnectSlots("bridge_stop")
 
         activeConnections.set(0)
+        activeFwdUdpSessions.set(0)
         carriedTxBytes.addAndGet(tunnelTxBytes.getAndSet(0))
         carriedRxBytes.addAndGet(tunnelRxBytes.getAndSet(0))
 
@@ -305,8 +421,11 @@ object SlipstreamSocksBridge {
         circuitOpenUntil = 0
         connectFailures.set(0)
         connectCircuitOpenUntil = 0
+        lastDnsSuccessMs.set(0)
+        lastConnectSuccessMs.set(0)
+        connectSemaphore = Semaphore(MAX_CONCURRENT_CONNECTS)
 
-        logd("Bridge stopped")
+        Log.i(TAG, "Bridge stopped: ${dumpState("after-stop")}")
     }
 
     fun isRunning(): Boolean = running.get()
@@ -674,6 +793,7 @@ object SlipstreamSocksBridge {
         }
         val thread = Thread({
             activeConnections.incrementAndGet()
+            clientSockets.add(clientSocket)
             try {
                 clientSocket.use { socket ->
                     socket.soTimeout = 30000
@@ -776,7 +896,11 @@ object SlipstreamSocksBridge {
                     logd("Connection handler error: ${e.message}")
                 }
             } finally {
-                activeConnections.decrementAndGet()
+                clientSockets.remove(clientSocket)
+                if (activeConnections.decrementAndGet() < 0) {
+                    activeConnections.set(0)
+                }
+                connectionThreads.remove(Thread.currentThread())
             }
         }, "slip-bridge-handler")
         thread.isDaemon = true
@@ -888,35 +1012,44 @@ object SlipstreamSocksBridge {
         clientOutput: OutputStream,
         sendReply: Boolean
     ) {
+        fun writeFailure(rep: Byte) {
+            if (!sendReply) return
+            try {
+                clientOutput.write(byteArrayOf(0x05, rep, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
+                clientOutput.flush()
+            } catch (_: Exception) {}
+        }
+
+        val slot = registerConnectSlot(destHost, destPort)
+        val semaphore = connectSemaphore
+        var closeReason = "unknown"
+
         // Fail fast if Slipstream tunnel is dead
         if (!SlipstreamBridge.isNativeRunning()) {
+            closeReason = "native_not_running"
             logd("CONNECT: Slipstream not running, rejecting $destHost:$destPort")
-            if (sendReply) {
-                clientOutput.write(byteArrayOf(0x05, 0x04, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
-                clientOutput.flush()
-            }
+            writeFailure(0x04)
+            closeConnectSlot(slot, closeReason, forceClosed = !running.get())
             return
         }
 
         // CONNECT circuit breaker: tunnel is overwhelmed, reject immediately
         if (isConnectCircuitOpen()) {
+            closeReason = "connect_circuit_open"
             logd("CONNECT: circuit open, rejecting $destHost:$destPort")
-            if (sendReply) {
-                clientOutput.write(byteArrayOf(0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
-                clientOutput.flush()
-            }
+            writeFailure(0x05)
+            closeConnectSlot(slot, closeReason, forceClosed = !running.get())
             return
         }
 
         // Limit concurrent CONNECT operations to avoid flooding the tunnel.
         // Wait briefly for a slot instead of rejecting immediately — instant
         // rejection causes apps to retry in a tight loop, burning tunnel data.
-        if (!connectSemaphore.tryAcquire(2, java.util.concurrent.TimeUnit.SECONDS)) {
-            logd("CONNECT: at capacity ($MAX_CONCURRENT_CONNECTS), rejecting $destHost:$destPort")
-            if (sendReply) {
-                clientOutput.write(byteArrayOf(0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
-                clientOutput.flush()
-            }
+        if (!semaphore.tryAcquire(2, java.util.concurrent.TimeUnit.SECONDS)) {
+            closeReason = "connect_capacity_timeout"
+            Log.w(TAG, "CONNECT: at capacity ($MAX_CONCURRENT_CONNECTS), rejecting $destHost:$destPort; ${dumpState("connect-capacity")}")
+            writeFailure(0x05)
+            closeConnectSlot(slot, closeReason, forceClosed = !running.get())
             return
         }
 
@@ -932,12 +1065,12 @@ object SlipstreamSocksBridge {
             remoteSocket.soTimeout = TCP_CONNECT_TIMEOUT_MS
             remoteSockets.add(remoteSocket)
         } catch (e: Exception) {
-            connectSemaphore.release()
+            closeReason = "local_slipstream_connect_failed"
+            semaphore.release()
             logd("CONNECT: failed to connect to Slipstream: ${e.message}")
-            if (sendReply) {
-                clientOutput.write(byteArrayOf(0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
-                clientOutput.flush()
-            }
+            recordConnectFailure()
+            writeFailure(0x05)
+            closeConnectSlot(slot, closeReason, forceClosed = !running.get())
             return
         }
 
@@ -958,13 +1091,13 @@ object SlipstreamSocksBridge {
             remoteInput.readFully(greetResp)
             val selectedMethod = greetResp[1].toInt() and 0xFF
             if (greetResp[0] != 0x05.toByte() || selectedMethod == 0xFF) {
+                closeReason = "socks_greeting_rejected"
                 Log.w(TAG, "CONNECT: Slipstream rejected greeting (${greetResp[0]}, ${greetResp[1]})")
-                connectSemaphore.release(); semaphoreReleased = true
-                if (sendReply) {
-                    clientOutput.write(byteArrayOf(0x05, 0x01, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
-                    clientOutput.flush()
-                }
+                semaphore.release(); semaphoreReleased = true
+                recordConnectFailure()
+                writeFailure(0x01)
                 remoteSocket.close()
+                closeConnectSlot(slot, closeReason, forceClosed = !running.get())
                 return
             }
 
@@ -984,13 +1117,13 @@ object SlipstreamSocksBridge {
                 val authResp = ByteArray(2)
                 remoteInput.readFully(authResp)
                 if (authResp[1] != 0x00.toByte()) {
+                    closeReason = "socks_auth_failed"
                     Log.w(TAG, "CONNECT: Dante auth failed (status=${authResp[1]})")
-                    connectSemaphore.release(); semaphoreReleased = true
-                    if (sendReply) {
-                        clientOutput.write(byteArrayOf(0x05, 0x01, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
-                        clientOutput.flush()
-                    }
+                    semaphore.release(); semaphoreReleased = true
+                    recordConnectFailure()
+                    writeFailure(0x01)
                     remoteSocket.close()
+                    closeConnectSlot(slot, closeReason, forceClosed = !running.get())
                     return
                 }
             }
@@ -1005,27 +1138,33 @@ object SlipstreamSocksBridge {
             remoteInput.readFully(connRespHeader)
 
             if (connRespHeader[1] != 0x00.toByte()) {
+                closeReason = "upstream_connect_rejected_${connRespHeader[1].toInt() and 0xFF}"
                 logd("CONNECT: Slipstream rejected to $destHost:$destPort (rep=${connRespHeader[1]})")
-                connectSemaphore.release(); semaphoreReleased = true
-                if (sendReply) {
-                    clientOutput.write(byteArrayOf(0x05, connRespHeader[1], 0x00, 0x01, 0, 0, 0, 0, 0, 0))
-                    clientOutput.flush()
-                }
+                semaphore.release(); semaphoreReleased = true
+                recordConnectFailure()
+                writeFailure(connRespHeader[1])
                 remoteSocket.close()
+                closeConnectSlot(slot, closeReason, forceClosed = !running.get())
                 return
             }
 
             // Read remaining response bytes based on address type
             when (connRespHeader[3].toInt() and 0xFF) {
                 0x01 -> { val rest = ByteArray(6); remoteInput.readFully(rest) }
-                0x03 -> { val len = remoteInput.read(); val rest = ByteArray(len + 2); remoteInput.readFully(rest) }
+                0x03 -> {
+                    val len = remoteInput.read()
+                    if (len < 0) throw java.io.IOException("Unexpected end of stream")
+                    val rest = ByteArray(len + 2)
+                    remoteInput.readFully(rest)
+                }
                 0x04 -> { val rest = ByteArray(18); remoteInput.readFully(rest) }
             }
 
             recordConnectSuccess()
             // Release semaphore after handshake — stream is established
-            connectSemaphore.release()
+            semaphore.release()
             semaphoreReleased = true
+            closeReason = "relay_closed"
             logd("CONNECT: $destHost:$destPort OK (via Slipstream)")
 
             // Send success to hev-socks5-tunnel (if not already sent)
@@ -1041,7 +1180,14 @@ object SlipstreamSocksBridge {
             remoteSocket.use { remote ->
                 val t1 = Thread({
                     try {
-                        copyStream(clientInput, remoteOutput, tunnelTxBytes, uploadLimiter)
+                        copyStream(
+                            clientInput,
+                            remoteOutput,
+                            tunnelTxBytes,
+                            uploadLimiter,
+                            slot,
+                            RelayDirection.CLIENT_TO_REMOTE
+                        )
                     } catch (e: Exception) {
                         logd("slip-bridge-c2s: ${e.message}")
                     } finally {
@@ -1052,7 +1198,14 @@ object SlipstreamSocksBridge {
                 t1.start()
 
                 try {
-                    copyStream(remoteInput, clientOutput, tunnelRxBytes, downloadLimiter)
+                    copyStream(
+                        remoteInput,
+                        clientOutput,
+                        tunnelRxBytes,
+                        downloadLimiter,
+                        slot,
+                        RelayDirection.REMOTE_TO_CLIENT
+                    )
                 } catch (e: Exception) {
                     logd("slip-bridge-s2c: ${e.message}")
                 } finally {
@@ -1060,22 +1213,22 @@ object SlipstreamSocksBridge {
                     t1.join(5000)
                     try { remote.close() } catch (_: Exception) {}
                     remoteSockets.remove(remote)
+                    closeConnectSlot(slot, closeReason, forceClosed = !running.get())
                 }
             }
         } catch (e: Exception) {
-            if (!semaphoreReleased) connectSemaphore.release()
+            if (closeReason == "unknown") {
+                closeReason = e.javaClass.simpleName.ifEmpty { "exception" }
+            }
+            if (!semaphoreReleased) semaphore.release()
             if (running.get()) {
                 recordConnectFailure()
                 logd("CONNECT: chain error for $destHost:$destPort: ${e.message}")
             }
-            if (sendReply) {
-                try {
-                    clientOutput.write(byteArrayOf(0x05, 0x01, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
-                    clientOutput.flush()
-                } catch (_: Exception) {}
-            }
+            writeFailure(0x01)
             try { remoteSocket.close() } catch (_: Exception) {}
             remoteSockets.remove(remoteSocket)
+            closeConnectSlot(slot, closeReason, forceClosed = !running.get())
         }
     }
 
@@ -1112,14 +1265,16 @@ object SlipstreamSocksBridge {
      * Non-DNS UDP: dropped silently (browser falls back to TCP CONNECT).
      */
     private fun handleFwdUdp(input: InputStream, output: OutputStream) {
-        output.write(byteArrayOf(0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
-        output.flush()
+        activeFwdUdpSessions.incrementAndGet()
+        try {
+            output.write(byteArrayOf(0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
+            output.flush()
 
-        logd("FWD_UDP session established")
+            logd("FWD_UDP session established")
 
-        while (running.get() && !Thread.currentThread().isInterrupted) {
-            val hdr = ByteArray(3)
-            input.readFully(hdr)
+            while (running.get() && !Thread.currentThread().isInterrupted) {
+                val hdr = ByteArray(3)
+                input.readFully(hdr)
 
             val datLen = ((hdr[0].toInt() and 0xFF) shl 8) or (hdr[1].toInt() and 0xFF)
             val hdrLen = hdr[2].toInt() and 0xFF
@@ -1175,9 +1330,12 @@ object SlipstreamSocksBridge {
             } catch (e: Exception) {
                 logd("FWD_UDP: forward to ${dest.first}:${dest.second} failed: ${e.message}")
             }
+            }
+        } finally {
+            val active = activeFwdUdpSessions.decrementAndGet()
+            if (active < 0) activeFwdUdpSessions.set(0)
+            logd("FWD_UDP session ended active=$active")
         }
-
-        logd("FWD_UDP session ended")
     }
 
     /**
@@ -1191,6 +1349,7 @@ object SlipstreamSocksBridge {
             sock.connect(InetSocketAddress(slipstreamHost, slipstreamPort), TCP_CONNECT_TIMEOUT_MS)
             sock.soTimeout = DNS_WORKER_TIMEOUT_MS
             sock.tcpNoDelay = true
+            remoteSockets.add(sock)
 
             val sockIn = sock.getInputStream()
             val sockOut = sock.getOutputStream()
@@ -1234,6 +1393,7 @@ object SlipstreamSocksBridge {
             return null
         } finally {
             try { sock?.close() } catch (_: Exception) {}
+            sock?.let { remoteSockets.remove(it) }
         }
     }
 
@@ -1258,6 +1418,7 @@ object SlipstreamSocksBridge {
             rawSocket.connect(InetSocketAddress(slipstreamHost, slipstreamPort), TCP_CONNECT_TIMEOUT_MS)
             rawSocket.soTimeout = DNS_WORKER_TIMEOUT_MS
             rawSocket.tcpNoDelay = true
+            remoteSockets.add(rawSocket)
 
             val rawIn = rawSocket.getInputStream()
             val rawOut = rawSocket.getOutputStream()
@@ -1306,6 +1467,7 @@ object SlipstreamSocksBridge {
         } finally {
             try { sslSocket?.close() } catch (_: Exception) {}
             try { rawSocket?.close() } catch (_: Exception) {}
+            rawSocket?.let { remoteSockets.remove(it) }
         }
     }
 
@@ -1354,7 +1516,12 @@ object SlipstreamSocksBridge {
         if (connResp[1] != 0x00.toByte()) return false
         when (connResp[3].toInt() and 0xFF) {
             0x01 -> { val r = ByteArray(6); input.readFully(r) }
-            0x03 -> { val l = input.read(); val r = ByteArray(l + 2); input.readFully(r) }
+            0x03 -> {
+                val l = input.read()
+                if (l < 0) return false
+                val r = ByteArray(l + 2)
+                input.readFully(r)
+            }
             0x04 -> { val r = ByteArray(18); input.readFully(r) }
         }
         return true
@@ -1437,7 +1604,14 @@ object SlipstreamSocksBridge {
         }
     }
 
-    private fun copyStream(input: InputStream, output: OutputStream, counter: AtomicLong? = null, limiter: RateLimiter? = null) {
+    private fun copyStream(
+        input: InputStream,
+        output: OutputStream,
+        counter: AtomicLong? = null,
+        limiter: RateLimiter? = null,
+        slot: ConnectSlot? = null,
+        direction: RelayDirection? = null
+    ) {
         val buffer = ByteArray(BUFFER_SIZE)
         val maxRead = if (limiter != null && limiter.bytesPerSecond > 0) {
             (limiter.bytesPerSecond / 4).toInt().coerceIn(1024, BUFFER_SIZE)
@@ -1449,6 +1623,13 @@ object SlipstreamSocksBridge {
             output.write(buffer, 0, bytesRead)
             output.flush()
             counter?.addAndGet(bytesRead.toLong())
+            if (slot != null && direction != null) {
+                slot.lastActivityMs.set(System.currentTimeMillis())
+                when (direction) {
+                    RelayDirection.CLIENT_TO_REMOTE -> slot.bytesOut.addAndGet(bytesRead.toLong())
+                    RelayDirection.REMOTE_TO_CLIENT -> slot.bytesIn.addAndGet(bytesRead.toLong())
+                }
+            }
         }
     }
 

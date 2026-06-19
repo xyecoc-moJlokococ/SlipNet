@@ -53,6 +53,7 @@ object SlipstreamSocksBridge {
     private const val BUFFER_SIZE = 65536  // 64KB for better throughput (was 32KB)
     private const val TCP_CONNECT_TIMEOUT_MS = 10000
     private const val RELAY_IDLE_TIMEOUT_MS = 300_000  // 5 min idle timeout for relay sockets
+    private const val DEFAULT_UPLOAD_QUEUE_GUARD_BYTES_PER_SECOND = 64L * 1024L
     private const val DNS_POOL_SIZE_MAX = 10  // max possible pool for array allocation
     private val dnsPoolSize: Int get() = dnsWorkerPoolSize.coerceAtLeast(0)
     private const val DNS_KEEPALIVE_INTERVAL_MS = 20_000L
@@ -152,6 +153,7 @@ object SlipstreamSocksBridge {
     @Volatile private var connectSemaphore = Semaphore(MAX_CONCURRENT_CONNECTS)
     private val connectFailures = AtomicInteger(0)
     @Volatile private var connectCircuitOpenUntil: Long = 0
+    private val uploadQueueGuardLimiter = RateLimiter(DEFAULT_UPLOAD_QUEUE_GUARD_BYTES_PER_SECOND)
     private val nextConnectSlotId = AtomicLong(1)
     private val connectSlots = ConcurrentHashMap<Long, ConnectSlot>()
     private val activeFwdUdpSessions = AtomicInteger(0)
@@ -300,6 +302,7 @@ object SlipstreamSocksBridge {
             "connectSlots=${connectSlots.size} stuckSlotsOver5s=${stuckSlots.size} " +
             "connectPermits=${connectSemaphore.availablePermits()}/$MAX_CONCURRENT_CONNECTS " +
             "connectCircuitOpen=${now < connectCircuitOpenUntil} dnsCircuitOpen=${now < circuitOpenUntil} " +
+            "uploadQueueGuard=${if (uploadLimiter == null) DEFAULT_UPLOAD_QUEUE_GUARD_BYTES_PER_SECOND else 0} " +
             "activeFwdUdp=${activeFwdUdpSessions.get()} lastDnsSuccessMs=${lastDnsSuccessMs.get()} " +
             "tx=${tunnelTxBytes.get()} rx=${tunnelRxBytes.get()} slots=$slotSummary fwdUdp=$fwdUdpSummary"
     }
@@ -1116,6 +1119,8 @@ object SlipstreamSocksBridge {
             remoteSocket = Socket()
             remoteSocket.connect(InetSocketAddress(slipstreamHost, slipstreamPort), TCP_CONNECT_TIMEOUT_MS)
             remoteSocket.tcpNoDelay = true
+            remoteSocket.sendBufferSize = BUFFER_SIZE
+            remoteSocket.receiveBufferSize = BUFFER_SIZE
             // Set read timeout for the SOCKS5 handshake phase so that hung
             // reads (e.g. QUIC transport died but localhost TCP stays open)
             // don't permanently hold a semaphore slot.
@@ -1241,7 +1246,7 @@ object SlipstreamSocksBridge {
                             clientInput,
                             remoteOutput,
                             tunnelTxBytes,
-                            uploadLimiter,
+                            effectiveUploadLimiter(),
                             slot,
                             RelayDirection.CLIENT_TO_REMOTE
                         )
@@ -1297,7 +1302,7 @@ object SlipstreamSocksBridge {
 
             val t1 = Thread({
                 try {
-                    copyStream(clientInput, remoteOutput, limiter = uploadLimiter)
+                    copyStream(clientInput, remoteOutput, limiter = effectiveUploadLimiter())
                 } catch (_: Exception) {
                 } finally {
                     try { remoteOutput.close() } catch (_: Exception) {}
@@ -1687,6 +1692,9 @@ object SlipstreamSocksBridge {
             else -> null
         }
     }
+
+    private fun effectiveUploadLimiter(): RateLimiter =
+        uploadLimiter ?: uploadQueueGuardLimiter
 
     private fun copyStream(
         input: InputStream,

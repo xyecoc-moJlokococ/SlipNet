@@ -353,15 +353,18 @@ object SlipstreamBridge {
         }
 
         val port = currentPort
-        Log.i(TAG, "Stopping slipstream client on port $port")
+        Log.i(TAG, "Stopping slipstream client on port $port (${dumpState("before-native-stop")})")
         try {
+            val stopStartedAt = System.currentTimeMillis()
             nativeStopSlipstreamClient()
+            val stopElapsedMs = System.currentTimeMillis() - stopStartedAt
+            Log.i(TAG, "nativeStopSlipstreamClient returned after ${stopElapsedMs}ms (${dumpState("after-native-stop-call")})")
             // Native stop waits up to 3s internally. Brief check — don't block disconnect.
             // If port is still stuck, the next startClient() has port fallback.
             if (port > 0 && isPortInUse(port)) {
-                Log.w(TAG, "Port $port still in use after native stop, waiting for cleanup...")
+                Log.w(TAG, "Port $port still in use after native stop, waiting for cleanup... probe=${probePort(port)}")
                 if (!waitForPortFree(port, 5000)) {
-                    Log.e(TAG, "Port $port still in use after native stop; leak suspected (${dumpState("stop-leak")})")
+                    Log.e(TAG, "Port $port still in use after native stop; leak suspected (${dumpState("stop-leak")}) probe=${probePort(port)}")
                 }
             }
             Log.i(TAG, "Slipstream client stopped (port $port free: ${port <= 0 || !isPortInUse(port)})")
@@ -414,10 +417,29 @@ object SlipstreamBridge {
         val quicReady = isQuicReady()
         val port = currentPort
         val portInUse = port > 0 && isPortInUse(port)
+        val lastError = try { nativeGetLastError()?.takeIf { it.isNotEmpty() } } catch (_: Exception) { null }
         return "reason=$reason port=$port portInUse=$portInUse nativeRunning=$running " +
             "quicReady=$quicReady owner=${currentOwner ?: "none"} proxyOnly=$proxyOnlyMode " +
             "protectSuccess=${protectSuccessCount.get()} protectFailure=${protectFailureCount.get()} " +
-            "lastProtectMs=${lastProtectMs.get()}"
+            "lastProtectMs=${lastProtectMs.get()} lastNativeError=${lastError ?: "none"}"
+    }
+
+    private fun probePort(port: Int): String {
+        return try {
+            java.net.Socket().use { socket ->
+                socket.connect(java.net.InetSocketAddress("127.0.0.1", port), 250)
+                socket.soTimeout = 250
+                val output = socket.getOutputStream()
+                val input = socket.getInputStream()
+                output.write(byteArrayOf(0x05, 0x01, 0x00))
+                output.flush()
+                val b0 = input.read()
+                val b1 = input.read()
+                "connect-ok socksResp=$b0/$b1"
+            }
+        } catch (e: Exception) {
+            "${e.javaClass.simpleName}:${e.message ?: "no-message"}"
+        }
     }
 
     /**

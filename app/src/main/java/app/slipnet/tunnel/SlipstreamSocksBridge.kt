@@ -17,6 +17,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.ReentrantLock
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
@@ -154,6 +155,8 @@ object SlipstreamSocksBridge {
     private val nextConnectSlotId = AtomicLong(1)
     private val connectSlots = ConcurrentHashMap<Long, ConnectSlot>()
     private val activeFwdUdpSessions = AtomicInteger(0)
+    private val nextFwdUdpSessionId = AtomicLong(1)
+    private val fwdUdpSessions = ConcurrentHashMap<Long, FwdUdpSession>()
 
     private data class ConnectSlot(
         val id: Long,
@@ -162,6 +165,16 @@ object SlipstreamSocksBridge {
         val lastActivityMs: AtomicLong = AtomicLong(startedAtMs),
         val bytesIn: AtomicLong = AtomicLong(0),
         val bytesOut: AtomicLong = AtomicLong(0)
+    )
+
+    private class FwdUdpSession(
+        val id: Long,
+        val startedAtMs: Long = System.currentTimeMillis(),
+        val lastActivityMs: AtomicLong = AtomicLong(startedAtMs),
+        val packets: AtomicLong = AtomicLong(0),
+        val dnsPackets: AtomicLong = AtomicLong(0),
+        val droppedPackets: AtomicLong = AtomicLong(0),
+        val lastDest: AtomicReference<String> = AtomicReference("none")
     )
 
     private enum class RelayDirection {
@@ -220,6 +233,23 @@ object SlipstreamSocksBridge {
         }
     }
 
+    private fun registerFwdUdpSession(): FwdUdpSession {
+        val session = FwdUdpSession(nextFwdUdpSessionId.getAndIncrement())
+        fwdUdpSessions[session.id] = session
+        return session
+    }
+
+    private fun closeFwdUdpSession(session: FwdUdpSession, active: Int) {
+        fwdUdpSessions.remove(session.id)
+        val now = System.currentTimeMillis()
+        logd(
+            "FWD_UDP session ${session.id} ended active=$active " +
+                "ageMs=${now - session.startedAtMs} idleMs=${now - session.lastActivityMs.get()} " +
+                "packets=${session.packets.get()} dns=${session.dnsPackets.get()} " +
+                "dropped=${session.droppedPackets.get()} lastDest=${session.lastDest.get()}"
+        )
+    }
+
     private fun stuckConnectSlots(
         now: Long = System.currentTimeMillis(),
         thresholdMs: Long = 5_000L
@@ -235,7 +265,13 @@ object SlipstreamSocksBridge {
     fun isCapacityExhausted(): Boolean {
         val last = lastConnectSuccessMs.get()
         if (last == 0L) return false
-        if (connectSemaphore.availablePermits() == MAX_CONCURRENT_CONNECTS) return false
+        val availablePermits = connectSemaphore.availablePermits()
+        if (availablePermits > 0) {
+            if (connectSlots.isNotEmpty() && System.currentTimeMillis() - last > CAPACITY_EXHAUSTION_THRESHOLD_MS) {
+                logd("CONNECT capacity check skipped: permits=$availablePermits/$MAX_CONCURRENT_CONNECTS; ${dumpState("capacity-skip")}")
+            }
+            return false
+        }
         val exhausted = System.currentTimeMillis() - last > CAPACITY_EXHAUSTION_THRESHOLD_MS
         if (exhausted) {
             Log.w(TAG, "Bridge capacity exhausted: ${dumpState("capacity")}")
@@ -252,6 +288,12 @@ object SlipstreamSocksBridge {
             .joinToString(prefix = "[", postfix = "]") { slot ->
                 "{id=${slot.id},dest=${slot.dest},ageMs=${now - slot.startedAtMs},idleMs=${now - slot.lastActivityMs.get()},out=${slot.bytesOut.get()},in=${slot.bytesIn.get()}}"
             }
+        val fwdUdpSummary = fwdUdpSessions.values
+            .sortedByDescending { now - it.lastActivityMs.get() }
+            .take(8)
+            .joinToString(prefix = "[", postfix = "]") { session ->
+                "{id=${session.id},lastDest=${session.lastDest.get()},ageMs=${now - session.startedAtMs},idleMs=${now - session.lastActivityMs.get()},packets=${session.packets.get()},dns=${session.dnsPackets.get()},dropped=${session.droppedPackets.get()}}"
+            }
         return "reason=$reason running=${running.get()} slipstream=$slipstreamHost:$slipstreamPort " +
             "activeConnections=${activeConnections.get()} handlerThreads=${connectionThreads.count { it.isAlive }} " +
             "clientSockets=${clientSockets.size} remoteSockets=${remoteSockets.size} " +
@@ -259,7 +301,7 @@ object SlipstreamSocksBridge {
             "connectPermits=${connectSemaphore.availablePermits()}/$MAX_CONCURRENT_CONNECTS " +
             "connectCircuitOpen=${now < connectCircuitOpenUntil} dnsCircuitOpen=${now < circuitOpenUntil} " +
             "activeFwdUdp=${activeFwdUdpSessions.get()} lastDnsSuccessMs=${lastDnsSuccessMs.get()} " +
-            "tx=${tunnelTxBytes.get()} rx=${tunnelRxBytes.get()} slots=$slotSummary"
+            "tx=${tunnelTxBytes.get()} rx=${tunnelRxBytes.get()} slots=$slotSummary fwdUdp=$fwdUdpSummary"
     }
 
     fun start(
@@ -299,6 +341,7 @@ object SlipstreamSocksBridge {
         lastConnectSuccessMs.set(0)
         lastDnsSuccessMs.set(0)
         activeFwdUdpSessions.set(0)
+        fwdUdpSessions.clear()
         connectSlots.clear()
         connectSemaphore = Semaphore(MAX_CONCURRENT_CONNECTS)
         // Resize worker pool to configured size
@@ -413,6 +456,7 @@ object SlipstreamSocksBridge {
 
         activeConnections.set(0)
         activeFwdUdpSessions.set(0)
+        fwdUdpSessions.clear()
         carriedTxBytes.addAndGet(tunnelTxBytes.getAndSet(0))
         carriedRxBytes.addAndGet(tunnelRxBytes.getAndSet(0))
 
@@ -1278,12 +1322,13 @@ object SlipstreamSocksBridge {
      * Non-DNS UDP: dropped silently (browser falls back to TCP CONNECT).
      */
     private fun handleFwdUdp(input: InputStream, output: OutputStream) {
+        val session = registerFwdUdpSession()
         activeFwdUdpSessions.incrementAndGet()
         try {
             output.write(byteArrayOf(0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
             output.flush()
 
-            logd("FWD_UDP session established")
+            logd("FWD_UDP session ${session.id} established")
 
             while (running.get() && !Thread.currentThread().isInterrupted) {
                 val hdr = ByteArray(3)
@@ -1324,9 +1369,13 @@ object SlipstreamSocksBridge {
                 Log.w(TAG, "FWD_UDP: failed to parse address")
                 continue
             }
+            session.lastActivityMs.set(System.currentTimeMillis())
+            session.packets.incrementAndGet()
+            session.lastDest.set("${dest.first}:${dest.second}")
 
             try {
                 val response = if (dest.second == 53) {
+                    session.dnsPackets.incrementAndGet()
                     // Block AAAA queries locally — server lacks IPv6, and
                     // forwarding wastes tunnel bandwidth. Return NODATA so
                     // apps fall back to A records instantly.
@@ -1337,6 +1386,7 @@ object SlipstreamSocksBridge {
                         forwardDnsPooled(payload)
                     }
                 } else {
+                    session.droppedPackets.incrementAndGet()
                     // Non-DNS UDP (QUIC, etc.): drop silently.
                     // Browser falls back to TCP → CONNECT through Slipstream.
                     null
@@ -1360,9 +1410,12 @@ object SlipstreamSocksBridge {
             }
             }
         } finally {
-            val active = activeFwdUdpSessions.decrementAndGet()
-            if (active < 0) activeFwdUdpSessions.set(0)
-            logd("FWD_UDP session ended active=$active")
+            var active = activeFwdUdpSessions.decrementAndGet()
+            if (active < 0) {
+                activeFwdUdpSessions.set(0)
+                active = 0
+            }
+            closeFwdUdpSession(session, active)
         }
     }
 

@@ -142,8 +142,8 @@ object SlipstreamSocksBridge {
     // can open many associations during upload tests, then leave them idle while
     // CONNECT traffic is starved. Keep the association pool small and reap idle
     // sessions quickly; DNS queries still complete within this window.
-    private const val MAX_CONCURRENT_FWD_UDP_SESSIONS = 6
-    private const val FWD_UDP_IDLE_TIMEOUT_MS = 15_000
+    private const val MAX_CONCURRENT_FWD_UDP_SESSIONS = 16
+    private const val FWD_UDP_IDLE_TIMEOUT_MS = 1_000
 
     // CONNECT concurrency limit and circuit breaker
     private const val MAX_CONCURRENT_CONNECTS = 8
@@ -1407,6 +1407,9 @@ object SlipstreamSocksBridge {
                 }
             } catch (e: Exception) {
                 logd("FWD_UDP: forward to ${dest.first}:${dest.second} failed: ${e.message}")
+            }
+            if (dest.second == 53) {
+                break
             }
             }
         } finally {

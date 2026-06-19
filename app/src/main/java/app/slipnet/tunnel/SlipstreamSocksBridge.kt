@@ -148,12 +148,9 @@ object SlipstreamSocksBridge {
 
     // CONNECT concurrency limit and circuit breaker
     private const val MAX_CONCURRENT_CONNECTS = 8
-    private const val MAX_CONCURRENT_RELAY_STREAMS = 12
-    private const val RELAY_STREAM_PERMIT_WAIT_MS = 1_000L
     private const val CONNECT_CIRCUIT_THRESHOLD = 3
     private const val CONNECT_CIRCUIT_COOLDOWN_MS = 5000L
     @Volatile private var connectSemaphore = Semaphore(MAX_CONCURRENT_CONNECTS)
-    @Volatile private var relaySemaphore = Semaphore(MAX_CONCURRENT_RELAY_STREAMS)
     private val connectFailures = AtomicInteger(0)
     @Volatile private var connectCircuitOpenUntil: Long = 0
     private val uploadQueueGuardLimiter = RateLimiter(DEFAULT_UPLOAD_QUEUE_GUARD_BYTES_PER_SECOND)
@@ -304,7 +301,6 @@ object SlipstreamSocksBridge {
             "clientSockets=${clientSockets.size} remoteSockets=${remoteSockets.size} " +
             "connectSlots=${connectSlots.size} stuckSlotsOver5s=${stuckSlots.size} " +
             "connectPermits=${connectSemaphore.availablePermits()}/$MAX_CONCURRENT_CONNECTS " +
-            "relayPermits=${relaySemaphore.availablePermits()}/$MAX_CONCURRENT_RELAY_STREAMS " +
             "connectCircuitOpen=${now < connectCircuitOpenUntil} dnsCircuitOpen=${now < circuitOpenUntil} " +
             "uploadQueueGuard=${if (uploadLimiter == null) DEFAULT_UPLOAD_QUEUE_GUARD_BYTES_PER_SECOND else 0} " +
             "activeFwdUdp=${activeFwdUdpSessions.get()} lastDnsSuccessMs=${lastDnsSuccessMs.get()} " +
@@ -351,7 +347,6 @@ object SlipstreamSocksBridge {
         fwdUdpSessions.clear()
         connectSlots.clear()
         connectSemaphore = Semaphore(MAX_CONCURRENT_CONNECTS)
-        relaySemaphore = Semaphore(MAX_CONCURRENT_RELAY_STREAMS)
         // Resize worker pool to configured size
         val poolSize = dnsPoolSize
         dnsWorkers = arrayOfNulls(poolSize)
@@ -483,7 +478,6 @@ object SlipstreamSocksBridge {
         lastDnsSuccessMs.set(0)
         lastConnectSuccessMs.set(0)
         connectSemaphore = Semaphore(MAX_CONCURRENT_CONNECTS)
-        relaySemaphore = Semaphore(MAX_CONCURRENT_RELAY_STREAMS)
 
         Log.i(TAG, "Bridge stopped: ${dumpState("after-stop")}")
     }
@@ -1120,8 +1114,6 @@ object SlipstreamSocksBridge {
         }
 
         var semaphoreReleased = false
-        var relayPermitAcquired = false
-        val relaySlots = relaySemaphore
         val remoteSocket: Socket
         try {
             remoteSocket = Socket()
@@ -1230,22 +1222,10 @@ object SlipstreamSocksBridge {
                 0x04 -> { val rest = ByteArray(18); remoteInput.readFully(rest) }
             }
 
+            recordConnectSuccess()
             // Release semaphore after handshake — stream is established
             semaphore.release()
             semaphoreReleased = true
-
-            if (!relaySlots.tryAcquire(RELAY_STREAM_PERMIT_WAIT_MS, TimeUnit.MILLISECONDS)) {
-                closeReason = "relay_capacity_timeout"
-                Log.w(TAG, "CONNECT: relay capacity ($MAX_CONCURRENT_RELAY_STREAMS), rejecting $destHost:$destPort; ${dumpState("relay-capacity")}")
-                writeFailure(0x05)
-                remoteSocket.close()
-                remoteSockets.remove(remoteSocket)
-                closeConnectSlot(slot, closeReason, forceClosed = !running.get())
-                return
-            }
-            relayPermitAcquired = true
-
-            recordConnectSuccess()
             closeReason = "relay_closed"
             logd("CONNECT: $destHost:$destPort OK (via Slipstream)")
 
@@ -1292,17 +1272,9 @@ object SlipstreamSocksBridge {
                     logd("slip-bridge-s2c: ${e.message}")
                 } finally {
                     try { clientSocket.shutdownOutput() } catch (_: Exception) {}
-                    try {
-                        t1.join(5000)
-                    } catch (_: InterruptedException) {
-                        Thread.currentThread().interrupt()
-                    }
+                    t1.join(5000)
                     try { remote.close() } catch (_: Exception) {}
                     remoteSockets.remove(remote)
-                    if (relayPermitAcquired) {
-                        relayPermitAcquired = false
-                        relaySlots.release()
-                    }
                     closeConnectSlot(slot, closeReason, forceClosed = !running.get())
                 }
             }
@@ -1318,10 +1290,6 @@ object SlipstreamSocksBridge {
             writeFailure(0x01)
             try { remoteSocket.close() } catch (_: Exception) {}
             remoteSockets.remove(remoteSocket)
-            if (relayPermitAcquired) {
-                relayPermitAcquired = false
-                relaySlots.release()
-            }
             closeConnectSlot(slot, closeReason, forceClosed = !running.get())
         }
     }

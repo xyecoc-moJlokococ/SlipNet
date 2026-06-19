@@ -143,15 +143,18 @@ object SlipstreamBridge {
             currentOwner = null
         }
 
-        // Preferred port leaks must be visible; do not silently fall back.
-        // Keep this short (3s) since we have port fallback — no need to block the user.
-        val actualPort = tcpListenPort
+        // Preferred port leaks must be visible, but they should not strand the user.
+        // Keep this short since nearby loopback-port fallback can keep startup moving.
+        var actualPort = tcpListenPort
         if (!waitForPortFree(actualPort, 5000)) {
-            val message = "Port $actualPort still in use after native stop; refusing fallback (${dumpState("port-leak")})"
-            Log.e(TAG, message)
-            return Result.failure(IllegalStateException(message))
-            // Preferred port is stuck (native thread didn't release it).
-            // Try alternative ports so the user isn't blocked.
+            val preferredPort = actualPort
+            actualPort = findAlternativePort(preferredPort)
+                ?: run {
+                    val message = "Port $preferredPort still in use after native stop; alternatives exhausted (${dumpState("port-leak")})"
+                    Log.e(TAG, message)
+                    return Result.failure(IllegalStateException(message))
+                }
+            Log.w(TAG, "Port $preferredPort still in use after native stop; using alternative port $actualPort")
         }
 
         return try {
@@ -202,7 +205,24 @@ object SlipstreamBridge {
                     // Only retry on a different port if this one is actually still held.
                     if (isPortInUse(actualPort)) {
                         val detail = nativeError ?: "native client exited before listener ready"
-                        startFailure(IllegalStateException("Port $actualPort still in use after native startup failure; refusing fallback: $detail"))
+                        retryOnAlternatePort(
+                            basePort = tcpListenPort,
+                            failedPort = actualPort,
+                            domain = domain,
+                            resolvers = resolvers,
+                            congestionControl = congestionControl,
+                            keepAliveInterval = keepAliveInterval,
+                            tcpListenHost = tcpListenHost,
+                            gsoEnabled = gsoEnabled,
+                            debugPoll = debugPoll,
+                            debugStreams = debugStreams,
+                            idlePollIntervalMs = idlePollIntervalMs,
+                            idleTimeoutMs = idleTimeoutMs,
+                            resolverTransport = nativeResolverTransport,
+                            owner = owner
+                        ).onFailure {
+                            Log.e(TAG, "Alternative port retry failed after native startup conflict: $detail", it)
+                        }
                     } else {
                         val detail = nativeError ?: "unknown startup error"
                         startFailure(RuntimeException("Failed to start client: $detail"))
@@ -291,6 +311,14 @@ object SlipstreamBridge {
         }
         Log.e(TAG, "Port $port still in use after ${waited}ms")
         return false
+    }
+
+    private fun findAlternativePort(basePort: Int): Int? {
+        for (offset in 10..50 step 10) {
+            val candidate = basePort + offset
+            if (!isPortInUse(candidate)) return candidate
+        }
+        return null
     }
 
     /**

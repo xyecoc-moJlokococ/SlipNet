@@ -137,6 +137,13 @@ object SlipstreamSocksBridge {
     private const val MAX_ACTIVE_CONNECTIONS = 64
     private val activeConnections = AtomicInteger(0)
 
+    // FWD_UDP is a long-lived association in hev-socks5-tunnel. QUIC-heavy apps
+    // can open many associations during upload tests, then leave them idle while
+    // CONNECT traffic is starved. Keep the association pool small and reap idle
+    // sessions quickly; DNS queries still complete within this window.
+    private const val MAX_CONCURRENT_FWD_UDP_SESSIONS = 6
+    private const val FWD_UDP_IDLE_TIMEOUT_MS = 15_000
+
     // CONNECT concurrency limit and circuit breaker
     private const val MAX_CONCURRENT_CONNECTS = 8
     private const val CONNECT_CIRCUIT_THRESHOLD = 3
@@ -872,7 +879,13 @@ object SlipstreamSocksBridge {
 
                     // Handle FWD_UDP (cmd 0x05)
                     if (cmd == 0x05) {
-                        socket.soTimeout = 0
+                        if (activeFwdUdpSessions.get() >= MAX_CONCURRENT_FWD_UDP_SESSIONS) {
+                            Log.w(TAG, "FWD_UDP: at capacity ($MAX_CONCURRENT_FWD_UDP_SESSIONS), rejecting; ${dumpState("fwd-udp-capacity")}")
+                            output.write(byteArrayOf(0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
+                            output.flush()
+                            return@Thread
+                        }
+                        socket.soTimeout = FWD_UDP_IDLE_TIMEOUT_MS
                         handleFwdUdp(input, output)
                         return@Thread
                     }
@@ -1274,7 +1287,12 @@ object SlipstreamSocksBridge {
 
             while (running.get() && !Thread.currentThread().isInterrupted) {
                 val hdr = ByteArray(3)
-                input.readFully(hdr)
+                try {
+                    input.readFully(hdr)
+                } catch (_: java.net.SocketTimeoutException) {
+                    logd("FWD_UDP idle timeout after ${FWD_UDP_IDLE_TIMEOUT_MS}ms")
+                    break
+                }
 
             val datLen = ((hdr[0].toInt() and 0xFF) shl 8) or (hdr[1].toInt() and 0xFF)
             val hdrLen = hdr[2].toInt() and 0xFF
@@ -1286,10 +1304,20 @@ object SlipstreamSocksBridge {
             }
 
             val addrBytes = ByteArray(addrLen)
-            input.readFully(addrBytes)
+            try {
+                input.readFully(addrBytes)
+            } catch (_: java.net.SocketTimeoutException) {
+                logd("FWD_UDP idle timeout while reading address")
+                break
+            }
 
             val payload = ByteArray(datLen)
-            input.readFully(payload)
+            try {
+                input.readFully(payload)
+            } catch (_: java.net.SocketTimeoutException) {
+                logd("FWD_UDP idle timeout while reading payload")
+                break
+            }
 
             val dest = parseSocksAddress(addrBytes)
             if (dest == null) {

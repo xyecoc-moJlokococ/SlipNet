@@ -52,7 +52,7 @@ object SlipstreamSocksBridge {
     private const val BIND_RETRY_DELAY_MS = 200L
     private const val BUFFER_SIZE = 65536  // 64KB for better throughput (was 32KB)
     private const val TCP_CONNECT_TIMEOUT_MS = 10000
-    private const val RELAY_IDLE_TIMEOUT_MS = 60_000  // keep stale relay sockets from hoarding stream credit
+    private const val RELAY_IDLE_TIMEOUT_MS = 10_000  // aggressively reap idle relay sockets
     private const val DEFAULT_UPLOAD_QUEUE_GUARD_BYTES_PER_SECOND = 24L * 1024L
     private const val DEFAULT_UPLOAD_QUEUE_GUARD_BURST_SECONDS = 0.25
     private const val DNS_POOL_SIZE_MAX = 10  // max possible pool for array allocation

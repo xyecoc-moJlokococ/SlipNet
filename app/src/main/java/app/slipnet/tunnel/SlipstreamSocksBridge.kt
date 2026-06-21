@@ -150,9 +150,11 @@ object SlipstreamSocksBridge {
     private const val MAX_CONCURRENT_CONNECTS = 8
     private const val CONNECT_CIRCUIT_THRESHOLD = 3
     private const val CONNECT_CIRCUIT_COOLDOWN_MS = 5000L
+    private const val CONNECT_CIRCUIT_RECOVERY_WINDOW_MS = 45_000L
     @Volatile private var connectSemaphore = Semaphore(MAX_CONCURRENT_CONNECTS)
     private val connectFailures = AtomicInteger(0)
     @Volatile private var connectCircuitOpenUntil: Long = 0
+    private val lastConnectCircuitOpenedMs = AtomicLong(0)
     private val nextConnectSlotId = AtomicLong(1)
     private val connectSlots = ConcurrentHashMap<Long, ConnectSlot>()
     private val activeFwdUdpSessions = AtomicInteger(0)
@@ -201,13 +203,19 @@ object SlipstreamSocksBridge {
     private const val CAPACITY_EXHAUSTION_THRESHOLD_MS = 20_000L  // no successful CONNECT for 20s
 
     private fun recordConnectSuccess() {
+        val now = System.currentTimeMillis()
         connectFailures.set(0)
-        lastConnectSuccessMs.set(System.currentTimeMillis())
+        lastConnectSuccessMs.set(now)
+        if (lastConnectCircuitOpenedMs.get() <= now) {
+            lastConnectCircuitOpenedMs.set(0)
+        }
     }
     private fun recordConnectFailure() {
         if (connectFailures.incrementAndGet() >= CONNECT_CIRCUIT_THRESHOLD) {
-            connectCircuitOpenUntil = System.currentTimeMillis() + CONNECT_CIRCUIT_COOLDOWN_MS
-            logd("CONNECT: circuit breaker OPEN — cooling down ${CONNECT_CIRCUIT_COOLDOWN_MS}ms")
+            val now = System.currentTimeMillis()
+            connectCircuitOpenUntil = now + CONNECT_CIRCUIT_COOLDOWN_MS
+            lastConnectCircuitOpenedMs.set(now)
+            Log.w(TAG, "CONNECT: circuit breaker OPEN; cooling down ${CONNECT_CIRCUIT_COOLDOWN_MS}ms; ${dumpState("connect-circuit-open")}")
         }
     }
 
@@ -285,6 +293,24 @@ object SlipstreamSocksBridge {
         return exhausted
     }
 
+    fun shouldRecoverConnectCircuit(): Boolean {
+        if (!running.get()) return false
+        val openedAt = lastConnectCircuitOpenedMs.get()
+        if (openedAt == 0L) return false
+
+        val now = System.currentTimeMillis()
+        if (now - openedAt > CONNECT_CIRCUIT_RECOVERY_WINDOW_MS) {
+            lastConnectCircuitOpenedMs.compareAndSet(openedAt, 0)
+            return false
+        }
+
+        val shouldRecover = lastConnectSuccessMs.get() < openedAt
+        if (shouldRecover) {
+            Log.w(TAG, "CONNECT circuit opened without later success: ${dumpState("connect-circuit-recover")}")
+        }
+        return shouldRecover
+    }
+
     fun dumpState(reason: String = "snapshot"): String {
         val now = System.currentTimeMillis()
         val stuckSlots = stuckConnectSlots(now)
@@ -305,7 +331,8 @@ object SlipstreamSocksBridge {
             "clientSockets=${clientSockets.size} remoteSockets=${remoteSockets.size} " +
             "connectSlots=${connectSlots.size} stuckSlotsOver5s=${stuckSlots.size} " +
             "connectPermits=${connectSemaphore.availablePermits()}/$MAX_CONCURRENT_CONNECTS " +
-            "connectCircuitOpen=${now < connectCircuitOpenUntil} dnsCircuitOpen=${now < circuitOpenUntil} " +
+            "connectCircuitOpen=${now < connectCircuitOpenUntil} lastConnectCircuitOpenedMs=${lastConnectCircuitOpenedMs.get()} " +
+            "dnsCircuitOpen=${now < circuitOpenUntil} " +
             "relayIdleTimeoutMs=$relayIdleTimeoutMs " +
             "uploadLimiter=${uploadLimiter?.bytesPerSecond ?: 0} " +
             "activeFwdUdp=${activeFwdUdpSessions.get()} lastDnsSuccessMs=${lastDnsSuccessMs.get()} " +
@@ -347,6 +374,7 @@ object SlipstreamSocksBridge {
         circuitOpenUntil = 0
         connectFailures.set(0)
         connectCircuitOpenUntil = 0
+        lastConnectCircuitOpenedMs.set(0)
         lastConnectSuccessMs.set(0)
         lastDnsSuccessMs.set(0)
         activeFwdUdpSessions.set(0)
@@ -481,6 +509,7 @@ object SlipstreamSocksBridge {
         circuitOpenUntil = 0
         connectFailures.set(0)
         connectCircuitOpenUntil = 0
+        lastConnectCircuitOpenedMs.set(0)
         lastDnsSuccessMs.set(0)
         lastConnectSuccessMs.set(0)
         connectSemaphore = Semaphore(MAX_CONCURRENT_CONNECTS)

@@ -3968,6 +3968,21 @@ class SlipNetVpnService : VpnService() {
                     }
                 }
 
+                // Slipstream CONNECT circuit: short cooldowns are normal, but if the
+                // circuit opens and no later CONNECT succeeds, new TCP flows are
+                // effectively rejected until the transport is restarted.
+                if (currentTunnelType == TunnelType.SLIPSTREAM || currentTunnelType == TunnelType.SLIPSTREAM_SSH) {
+                    if (SlipstreamSocksBridge.shouldRecoverConnectCircuit()) {
+                        Log.e(TAG, "Slipstream CONNECT circuit stuck, triggering reconnect")
+                        setSlipstreamHealthState(TunnelHealthState.DEGRADED, "CONNECT circuit stuck")
+                        dumpSlipstreamState("health-connect-circuit-stuck")
+                        launch(Dispatchers.Main) {
+                            handleTunnelFailure("CONNECT circuit stuck")
+                        }
+                        break
+                    }
+                }
+
                 // For SSH-based tunnels: actively probe the SSH session every ~30s.
                 val usesSsh = currentTunnelType == TunnelType.SSH ||
                         currentTunnelType == TunnelType.DNSTT_SSH ||

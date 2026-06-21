@@ -289,7 +289,18 @@ class VpnRepositoryImpl @Inject constructor(
 
         val listenPort = portOverride ?: preferencesDataStore.proxyListenPort.first()
         val listenHost = hostOverride ?: preferencesDataStore.proxyListenAddress.first()
-        val success = startSlipstreamClient(profile.domain, resolvers, profile, debugLogging, listenPort, listenHost)
+        val pacingGainProbe = preferencesDataStore.slipstreamPacingGainProbe.first()
+        val dnsTcpPacketLoopBurst = preferencesDataStore.slipstreamDnsTcpPacketLoopBurst.first()
+        val success = startSlipstreamClient(
+            profile.domain,
+            resolvers,
+            profile,
+            debugLogging,
+            listenPort,
+            listenHost,
+            pacingGainProbe,
+            dnsTcpPacketLoopBurst
+        )
 
         if (success) {
             Log.i(TAG, "Slipstream SOCKS5 proxy started successfully")
@@ -752,6 +763,7 @@ class VpnRepositoryImpl @Inject constructor(
     ): Result<Unit> = withContext(Dispatchers.IO) {
         val localAuthUser = if (preferencesDataStore.proxyAuthEnabled.first()) preferencesDataStore.proxyAuthUsername.first().ifEmpty { null } else null
         val localAuthPass = if (preferencesDataStore.proxyAuthEnabled.first()) preferencesDataStore.proxyAuthPassword.first().ifEmpty { null } else null
+        SlipstreamSocksBridge.relayIdleTimeoutMs = preferencesDataStore.slipstreamRelayIdleTimeoutMs.first()
         val result = SlipstreamSocksBridge.start(
             slipstreamPort = slipstreamPort,
             slipstreamHost = slipstreamHost,
@@ -1091,7 +1103,18 @@ class VpnRepositoryImpl @Inject constructor(
                 // Step 1: Start the Slipstream DNS tunnel (SOCKS5 proxy)
                 val proxyPort = runBlocking { preferencesDataStore.proxyListenPort.first() }
                 val proxyHost = runBlocking { preferencesDataStore.proxyListenAddress.first() }
-                val success = startSlipstreamClient(profile.domain, resolvers, profile, debugLogging, proxyPort, proxyHost)
+                val pacingGainProbe = runBlocking { preferencesDataStore.slipstreamPacingGainProbe.first() }
+                val dnsTcpPacketLoopBurst = runBlocking { preferencesDataStore.slipstreamDnsTcpPacketLoopBurst.first() }
+                val success = startSlipstreamClient(
+                    profile.domain,
+                    resolvers,
+                    profile,
+                    debugLogging,
+                    proxyPort,
+                    proxyHost,
+                    pacingGainProbe,
+                    dnsTcpPacketLoopBurst
+                )
 
                 if (!success) {
                     val error = tunnelStartException?.message ?: "Failed to start tunnel"
@@ -1158,7 +1181,9 @@ class VpnRepositoryImpl @Inject constructor(
         profile: ServerProfile,
         debugLogging: Boolean,
         listenPort: Int,
-        listenHost: String
+        listenHost: String,
+        pacingGainProbe: Double,
+        dnsTcpPacketLoopBurst: Int
     ): Boolean {
         tunnelStartException = null
         val result = SlipstreamBridge.startClient(
@@ -1173,7 +1198,9 @@ class VpnRepositoryImpl @Inject constructor(
             debugStreams = debugLogging,
             idlePollIntervalMs = 10000,
             idleTimeoutMs = 120000,
-            resolverTransport = slipstreamResolverTransport(profile)
+            resolverTransport = slipstreamResolverTransport(profile),
+            pacingGainProbe = pacingGainProbe,
+            dnsTcpPacketLoopBurst = dnsTcpPacketLoopBurst
         )
         if (result.isFailure) {
             val exception = result.exceptionOrNull()

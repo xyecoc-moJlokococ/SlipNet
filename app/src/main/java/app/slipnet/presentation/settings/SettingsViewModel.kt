@@ -43,6 +43,9 @@ data class SettingsUiState(
     val disableQuic: Boolean = true,
     val blockIpv6: Boolean = true,
     val vpnMtu: Int = PreferencesDataStore.DEFAULT_MTU,
+    val slipstreamPacingGainProbe: Double = PreferencesDataStore.DEFAULT_SLIPSTREAM_PACING_GAIN_PROBE,
+    val slipstreamDnsTcpPacketLoopBurst: Int = PreferencesDataStore.DEFAULT_SLIPSTREAM_DNS_TCP_PACKET_LOOP_BURST,
+    val slipstreamRelayIdleTimeoutMs: Int = PreferencesDataStore.DEFAULT_SLIPSTREAM_RELAY_IDLE_TIMEOUT_MS,
     // Bandwidth Limiting (0 = unlimited, KB/s)
     val uploadLimitKbps: Int = 0,
     val downloadLimitKbps: Int = 0,
@@ -246,6 +249,15 @@ class SettingsViewModel @Inject constructor(
                 preferencesDataStore.downloadLimitKbps
             ) { up, down -> Pair(up, down) }
 
+            data class SlipstreamTuning(val pacingGainProbe: Double, val dnsTcpBurst: Int, val relayIdleTimeoutMs: Int)
+            val slipstreamTuningFlow = combine(
+                preferencesDataStore.slipstreamPacingGainProbe,
+                preferencesDataStore.slipstreamDnsTcpPacketLoopBurst,
+                preferencesDataStore.slipstreamRelayIdleTimeoutMs
+            ) { pacingGainProbe, dnsTcpBurst, relayIdleTimeoutMs ->
+                SlipstreamTuning(pacingGainProbe, dnsTcpBurst, relayIdleTimeoutMs)
+            }
+
             combine(withGeoFlow, remoteDnsFlow, globalResolverFlow, preferencesDataStore.dnsWorkerMode, preferencesDataStore.blockIpv6) { state, remoteDns, globalResolver, workerMode, blockIpv6 ->
                 state.copy(
                     dnsWorkerMode = workerMode,
@@ -260,6 +272,12 @@ class SettingsViewModel @Inject constructor(
                 state.copy(
                     uploadLimitKbps = bandwidth.first,
                     downloadLimitKbps = bandwidth.second
+                )
+            }.combine(slipstreamTuningFlow) { state, tuning ->
+                state.copy(
+                    slipstreamPacingGainProbe = tuning.pacingGainProbe,
+                    slipstreamDnsTcpPacketLoopBurst = tuning.dnsTcpBurst,
+                    slipstreamRelayIdleTimeoutMs = tuning.relayIdleTimeoutMs
                 )
             }.combine(proxyAuthFlow) { state, proxyAuth ->
                 state.copy(
@@ -375,6 +393,24 @@ class SettingsViewModel @Inject constructor(
     fun setDownloadLimitKbps(kbps: Int) {
         viewModelScope.launch {
             preferencesDataStore.setDownloadLimitKbps(kbps)
+        }
+    }
+
+    fun setSlipstreamPacingGainProbe(value: Double) {
+        viewModelScope.launch {
+            preferencesDataStore.setSlipstreamPacingGainProbe(value)
+        }
+    }
+
+    fun setSlipstreamDnsTcpPacketLoopBurst(value: Int) {
+        viewModelScope.launch {
+            preferencesDataStore.setSlipstreamDnsTcpPacketLoopBurst(value)
+        }
+    }
+
+    fun setSlipstreamRelayIdleTimeoutMs(value: Int) {
+        viewModelScope.launch {
+            preferencesDataStore.setSlipstreamRelayIdleTimeoutMs(value)
         }
     }
 

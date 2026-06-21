@@ -52,7 +52,8 @@ object SlipstreamSocksBridge {
     private const val BIND_RETRY_DELAY_MS = 200L
     private const val BUFFER_SIZE = 65536  // 64KB for better throughput (was 32KB)
     private const val TCP_CONNECT_TIMEOUT_MS = 10000
-    private const val RELAY_IDLE_TIMEOUT_MS = 10_000  // aggressively reap idle relay sockets
+    const val DEFAULT_RELAY_IDLE_TIMEOUT_MS = 10_000  // aggressively reap idle relay sockets
+    @Volatile var relayIdleTimeoutMs = DEFAULT_RELAY_IDLE_TIMEOUT_MS
     private const val DEFAULT_UPLOAD_QUEUE_GUARD_BYTES_PER_SECOND = 24L * 1024L
     private const val DEFAULT_UPLOAD_QUEUE_GUARD_BURST_SECONDS = 0.25
     private const val DNS_POOL_SIZE_MAX = 10  // max possible pool for array allocation
@@ -306,6 +307,7 @@ object SlipstreamSocksBridge {
             "connectSlots=${connectSlots.size} stuckSlotsOver5s=${stuckSlots.size} " +
             "connectPermits=${connectSemaphore.availablePermits()}/$MAX_CONCURRENT_CONNECTS " +
             "connectCircuitOpen=${now < connectCircuitOpenUntil} dnsCircuitOpen=${now < circuitOpenUntil} " +
+            "relayIdleTimeoutMs=$relayIdleTimeoutMs " +
             "uploadQueueGuard=${if (uploadLimiter == null) DEFAULT_UPLOAD_QUEUE_GUARD_BYTES_PER_SECOND else 0} " +
             "activeFwdUdp=${activeFwdUdpSessions.get()} lastDnsSuccessMs=${lastDnsSuccessMs.get()} " +
             "tx=${tunnelTxBytes.get()} rx=${tunnelRxBytes.get()} slots=$slotSummary fwdUdp=$fwdUdpSummary"
@@ -329,6 +331,7 @@ object SlipstreamSocksBridge {
         Log.i(TAG, "  Listen: $listenHost:$listenPort")
         Log.i(TAG, "  Local auth: ${if (!localAuthUsername.isNullOrEmpty()) "enabled" else "disabled"}")
         Log.i(TAG, "  DNS: ${dnsServer ?: PRIMARY_DNS_HOST} (fallback: ${dnsFallback ?: FALLBACK_DNS_HOST})")
+        Log.i(TAG, "  Relay idle timeout: ${relayIdleTimeoutMs.coerceIn(1_000, 300_000)}ms")
         Log.i(TAG, "========================================")
 
         stop()
@@ -1239,8 +1242,9 @@ object SlipstreamSocksBridge {
                 clientOutput.flush()
             }
 
-            clientSocket.soTimeout = RELAY_IDLE_TIMEOUT_MS
-            remoteSocket.soTimeout = RELAY_IDLE_TIMEOUT_MS
+            val relayTimeoutMs = relayIdleTimeoutMs.coerceIn(1_000, 300_000)
+            clientSocket.soTimeout = relayTimeoutMs
+            remoteSocket.soTimeout = relayTimeoutMs
 
             // Bridge bidirectionally
             remoteSocket.use { remote ->

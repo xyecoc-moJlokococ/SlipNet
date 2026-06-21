@@ -106,6 +106,10 @@ class PreferencesDataStore @Inject constructor(
         val REMOTE_DNS_MODE = stringPreferencesKey("remote_dns_mode")
         val CUSTOM_REMOTE_DNS = stringPreferencesKey("custom_remote_dns")
         val CUSTOM_REMOTE_DNS_FALLBACK = stringPreferencesKey("custom_remote_dns_fallback")
+        // Slipstream runtime tuning keys
+        val SLIPSTREAM_PACING_GAIN_PROBE = stringPreferencesKey("slipstream_pacing_gain_probe")
+        val SLIPSTREAM_DNS_TCP_PACKET_LOOP_BURST = intPreferencesKey("slipstream_dns_tcp_packet_loop_burst")
+        val SLIPSTREAM_RELAY_IDLE_TIMEOUT_MS = intPreferencesKey("slipstream_relay_idle_timeout_ms")
         // Bandwidth Limiting Keys
         val UPLOAD_LIMIT_KBPS = intPreferencesKey("upload_limit_kbps")
         val DOWNLOAD_LIMIT_KBPS = intPreferencesKey("download_limit_kbps")
@@ -360,6 +364,41 @@ class PreferencesDataStore @Inject constructor(
     suspend fun setDownloadLimitKbps(kbps: Int) {
         dataStore.edit { prefs ->
             prefs[Keys.DOWNLOAD_LIMIT_KBPS] = kbps.coerceAtLeast(0)
+        }
+    }
+
+    val slipstreamPacingGainProbe: Flow<Double> = dataStore.data.map { prefs ->
+        prefs[Keys.SLIPSTREAM_PACING_GAIN_PROBE]?.toDoubleOrNull()
+            ?: DEFAULT_SLIPSTREAM_PACING_GAIN_PROBE
+    }
+
+    suspend fun setSlipstreamPacingGainProbe(value: Double) {
+        dataStore.edit { prefs ->
+            prefs[Keys.SLIPSTREAM_PACING_GAIN_PROBE] =
+                value.takeIf { !it.isNaN() && !it.isInfinite() }?.coerceIn(1.0, 4.0)?.toString()
+                    ?: DEFAULT_SLIPSTREAM_PACING_GAIN_PROBE.toString()
+        }
+    }
+
+    val slipstreamDnsTcpPacketLoopBurst: Flow<Int> = dataStore.data.map { prefs ->
+        prefs[Keys.SLIPSTREAM_DNS_TCP_PACKET_LOOP_BURST]
+            ?: DEFAULT_SLIPSTREAM_DNS_TCP_PACKET_LOOP_BURST
+    }
+
+    suspend fun setSlipstreamDnsTcpPacketLoopBurst(value: Int) {
+        dataStore.edit { prefs ->
+            prefs[Keys.SLIPSTREAM_DNS_TCP_PACKET_LOOP_BURST] = value.coerceIn(1, 512)
+        }
+    }
+
+    val slipstreamRelayIdleTimeoutMs: Flow<Int> = dataStore.data.map { prefs ->
+        prefs[Keys.SLIPSTREAM_RELAY_IDLE_TIMEOUT_MS]
+            ?: DEFAULT_SLIPSTREAM_RELAY_IDLE_TIMEOUT_MS
+    }
+
+    suspend fun setSlipstreamRelayIdleTimeoutMs(value: Int) {
+        dataStore.edit { prefs ->
+            prefs[Keys.SLIPSTREAM_RELAY_IDLE_TIMEOUT_MS] = value.coerceIn(1_000, 300_000)
         }
     }
 
@@ -729,6 +768,9 @@ class PreferencesDataStore @Inject constructor(
         const val DEFAULT_REMOTE_DNS = "8.8.8.8"
         const val DEFAULT_REMOTE_DNS_FALLBACK = "1.1.1.1"
         const val DEFAULT_MTU = 1500
+        const val DEFAULT_SLIPSTREAM_PACING_GAIN_PROBE = 1.6
+        const val DEFAULT_SLIPSTREAM_DNS_TCP_PACKET_LOOP_BURST = 96
+        const val DEFAULT_SLIPSTREAM_RELAY_IDLE_TIMEOUT_MS = 10_000
         /** Fallback only — [ensureProxyPortInitialized] assigns a random port on first launch. */
         const val DEFAULT_PROXY_PORT = 10880
     }

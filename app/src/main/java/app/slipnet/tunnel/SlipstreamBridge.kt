@@ -16,6 +16,8 @@ object SlipstreamBridge {
     const val OWNER_PROBE = "probe"
     const val DEFAULT_SLIPSTREAM_PORT = 1080
     const val DEFAULT_LISTEN_HOST = "127.0.0.1"
+    const val DEFAULT_PACING_GAIN_PROBE = 1.6
+    const val DEFAULT_DNS_TCP_PACKET_LOOP_BURST = 96
 
     private var isLibraryLoaded = false
     private var currentPort = DEFAULT_SLIPSTREAM_PORT
@@ -123,6 +125,8 @@ object SlipstreamBridge {
         idlePollIntervalMs: Int = 10000,
         idleTimeoutMs: Int = 120000,
         resolverTransport: String = "udp",
+        pacingGainProbe: Double = DEFAULT_PACING_GAIN_PROBE,
+        dnsTcpPacketLoopBurst: Int = DEFAULT_DNS_TCP_PACKET_LOOP_BURST,
         owner: String = OWNER_VPN
     ): Result<Unit> {
         if (!isLibraryLoaded) {
@@ -160,9 +164,13 @@ object SlipstreamBridge {
         return try {
             val nativeResolverTransport =
                 if (resolverTransport.equals("tcp", ignoreCase = true)) "tcp" else "udp"
+            val nativePacingGainProbe =
+                pacingGainProbe.takeIf { !it.isNaN() && !it.isInfinite() }?.coerceIn(1.0, 4.0)
+                    ?: DEFAULT_PACING_GAIN_PROBE
+            val nativeDnsTcpPacketLoopBurst = dnsTcpPacketLoopBurst.coerceIn(1, 512)
             Log.i(
                 TAG,
-                "Starting slipstream client on $tcpListenHost:$actualPort, domain=$domain, resolverTransport=$nativeResolverTransport"
+                "Starting slipstream client on $tcpListenHost:$actualPort, domain=$domain, resolverTransport=$nativeResolverTransport, pacingGainProbe=$nativePacingGainProbe, dnsTcpPacketLoopBurst=$nativeDnsTcpPacketLoopBurst"
             )
             currentPort = actualPort
 
@@ -180,7 +188,9 @@ object SlipstreamBridge {
                 debugStreams = debugStreams,
                 idlePollInterval = idlePollIntervalMs,
                 idleTimeoutMs = idleTimeoutMs,
-                resolverTransport = nativeResolverTransport
+                resolverTransport = nativeResolverTransport,
+                pacingGainProbe = nativePacingGainProbe,
+                dnsTcpPacketLoopBurst = nativeDnsTcpPacketLoopBurst
             )
 
             when (result) {
@@ -219,6 +229,8 @@ object SlipstreamBridge {
                             idlePollIntervalMs = idlePollIntervalMs,
                             idleTimeoutMs = idleTimeoutMs,
                             resolverTransport = nativeResolverTransport,
+                            pacingGainProbe = nativePacingGainProbe,
+                            dnsTcpPacketLoopBurst = nativeDnsTcpPacketLoopBurst,
                             owner = owner
                         ).onFailure {
                             Log.e(TAG, "Alternative port retry failed after native startup conflict: $detail", it)
@@ -260,6 +272,8 @@ object SlipstreamBridge {
         idlePollIntervalMs: Int,
         idleTimeoutMs: Int,
         resolverTransport: String,
+        pacingGainProbe: Double,
+        dnsTcpPacketLoopBurst: Int,
         owner: String
     ): Result<Unit> {
         for (offset in 10..50 step 10) {
@@ -283,7 +297,9 @@ object SlipstreamBridge {
                 debugStreams = debugStreams,
                 idlePollInterval = idlePollIntervalMs,
                 idleTimeoutMs = idleTimeoutMs,
-                resolverTransport = resolverTransport
+                resolverTransport = resolverTransport,
+                pacingGainProbe = pacingGainProbe,
+                dnsTcpPacketLoopBurst = dnsTcpPacketLoopBurst
             )
 
             if (result == 0) {
@@ -481,7 +497,9 @@ object SlipstreamBridge {
         debugStreams: Boolean,
         idlePollInterval: Int,
         idleTimeoutMs: Int,
-        resolverTransport: String
+        resolverTransport: String,
+        pacingGainProbe: Double,
+        dnsTcpPacketLoopBurst: Int
     ): Int
 
     private external fun nativeStopSlipstreamClient()

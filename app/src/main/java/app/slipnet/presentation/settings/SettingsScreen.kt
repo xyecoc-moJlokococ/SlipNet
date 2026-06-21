@@ -155,6 +155,7 @@ fun SettingsScreen(
     var showDnsPoolDialog by remember { mutableStateOf(false) }
     var showMtuDialog by remember { mutableStateOf(false) }
     var showBandwidthLimitDialog by remember { mutableStateOf(false) }
+    var showSlipstreamTuningDialog by remember { mutableStateOf(false) }
     var showDnsWorkerDialog by remember { mutableStateOf(false) }
     var showResetSettingsDialog by remember { mutableStateOf(false) }
 
@@ -600,6 +601,18 @@ fun SettingsScreen(
 
                 SettingsDivider()
 
+                ClickableSettingItem(
+                    icon = Icons.Default.Numbers,
+                    title = tx("Slipstream tuning", "Slipstream tuning"),
+                    description = tx(
+                        "Gain: ${uiState.slipstreamPacingGainProbe} / TCP burst: ${uiState.slipstreamDnsTcpPacketLoopBurst} / Relay idle: ${uiState.slipstreamRelayIdleTimeoutMs}ms",
+                        "Gain: ${uiState.slipstreamPacingGainProbe} / TCP burst: ${uiState.slipstreamDnsTcpPacketLoopBurst} / Relay idle: ${uiState.slipstreamRelayIdleTimeoutMs}ms"
+                    ),
+                    onClick = { showSlipstreamTuningDialog = true }
+                )
+
+                SettingsDivider()
+
                 SwitchSettingItem(
                     icon = Icons.Default.Lan,
                     title = tx("Append HTTP Proxy to VPN", "Добавить HTTP-прокси в VPN"),
@@ -995,6 +1008,21 @@ fun SettingsScreen(
                 viewModel.setUploadLimitKbps(upKbps)
                 viewModel.setDownloadLimitKbps(downKbps)
                 showBandwidthLimitDialog = false
+            }
+        )
+    }
+
+    if (showSlipstreamTuningDialog) {
+        SlipstreamTuningDialog(
+            currentPacingGainProbe = uiState.slipstreamPacingGainProbe,
+            currentDnsTcpPacketLoopBurst = uiState.slipstreamDnsTcpPacketLoopBurst,
+            currentRelayIdleTimeoutMs = uiState.slipstreamRelayIdleTimeoutMs,
+            onDismiss = { showSlipstreamTuningDialog = false },
+            onApply = { pacingGainProbe, dnsTcpPacketLoopBurst, relayIdleTimeoutMs ->
+                viewModel.setSlipstreamPacingGainProbe(pacingGainProbe)
+                viewModel.setSlipstreamDnsTcpPacketLoopBurst(dnsTcpPacketLoopBurst)
+                viewModel.setSlipstreamRelayIdleTimeoutMs(relayIdleTimeoutMs)
+                showSlipstreamTuningDialog = false
             }
         )
     }
@@ -2476,6 +2504,87 @@ private fun BandwidthLimitDialog(
         dismissButton = {
             TextButton(onClick = onDismiss) {
                 Text(tx("Cancel", "Отмена"))
+            }
+        }
+    )
+}
+
+@Composable
+private fun SlipstreamTuningDialog(
+    currentPacingGainProbe: Double,
+    currentDnsTcpPacketLoopBurst: Int,
+    currentRelayIdleTimeoutMs: Int,
+    onDismiss: () -> Unit,
+    onApply: (pacingGainProbe: Double, dnsTcpPacketLoopBurst: Int, relayIdleTimeoutMs: Int) -> Unit
+) {
+    var pacingGainText by remember { mutableStateOf(currentPacingGainProbe.toString()) }
+    var dnsTcpBurstText by remember { mutableStateOf(currentDnsTcpPacketLoopBurst.toString()) }
+    var relayIdleText by remember { mutableStateOf(currentRelayIdleTimeoutMs.toString()) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(tx("Slipstream tuning", "Slipstream tuning")) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    text = tx(
+                        "Advanced values for Slipstream. Defaults: gain 1.6, TCP burst 96, relay idle 10000ms. Applies on next connection.",
+                        "Advanced values for Slipstream. Defaults: gain 1.6, TCP burst 96, relay idle 10000ms. Applies on next connection."
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                OutlinedTextField(
+                    value = pacingGainText,
+                    onValueChange = { value ->
+                        pacingGainText = value.filter { c -> c.isDigit() || c == '.' }.take(4)
+                    },
+                    label = { Text("PACING_GAIN_PROBE") },
+                    placeholder = { Text("1.0-4.0") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = dnsTcpBurstText,
+                    onValueChange = { dnsTcpBurstText = it.filter { c -> c.isDigit() }.take(3) },
+                    label = { Text("DNS_TCP_PACKET_LOOP_BURST") },
+                    placeholder = { Text("1-512") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = relayIdleText,
+                    onValueChange = { relayIdleText = it.filter { c -> c.isDigit() }.take(6) },
+                    label = { Text("Relay idle timeout (ms)") },
+                    placeholder = { Text("1000-300000") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    val pacingGain = pacingGainText.toDoubleOrNull()
+                        ?.takeIf { !it.isNaN() && !it.isInfinite() }
+                        ?.coerceIn(1.0, 4.0)
+                        ?: currentPacingGainProbe
+                    val dnsTcpBurst = (dnsTcpBurstText.toIntOrNull()
+                        ?: currentDnsTcpPacketLoopBurst).coerceIn(1, 512)
+                    val relayIdle = (relayIdleText.toIntOrNull()
+                        ?: currentRelayIdleTimeoutMs).coerceIn(1_000, 300_000)
+                    onApply(pacingGain, dnsTcpBurst, relayIdle)
+                }
+            ) {
+                Text(tx("Apply", "Apply"))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(tx("Cancel", "Cancel"))
             }
         }
     )

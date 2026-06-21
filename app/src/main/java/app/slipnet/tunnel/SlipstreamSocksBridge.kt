@@ -54,8 +54,6 @@ object SlipstreamSocksBridge {
     private const val TCP_CONNECT_TIMEOUT_MS = 10000
     const val DEFAULT_RELAY_IDLE_TIMEOUT_MS = 10_000  // aggressively reap idle relay sockets
     @Volatile var relayIdleTimeoutMs = DEFAULT_RELAY_IDLE_TIMEOUT_MS
-    private const val DEFAULT_UPLOAD_QUEUE_GUARD_BYTES_PER_SECOND = 24L * 1024L
-    private const val DEFAULT_UPLOAD_QUEUE_GUARD_BURST_SECONDS = 0.25
     private const val DNS_POOL_SIZE_MAX = 10  // max possible pool for array allocation
     private val dnsPoolSize: Int get() = dnsWorkerPoolSize.coerceAtLeast(0)
     private const val DNS_KEEPALIVE_INTERVAL_MS = 20_000L
@@ -155,10 +153,6 @@ object SlipstreamSocksBridge {
     @Volatile private var connectSemaphore = Semaphore(MAX_CONCURRENT_CONNECTS)
     private val connectFailures = AtomicInteger(0)
     @Volatile private var connectCircuitOpenUntil: Long = 0
-    private val uploadQueueGuardLimiter = RateLimiter(
-        DEFAULT_UPLOAD_QUEUE_GUARD_BYTES_PER_SECOND,
-        DEFAULT_UPLOAD_QUEUE_GUARD_BURST_SECONDS
-    )
     private val nextConnectSlotId = AtomicLong(1)
     private val connectSlots = ConcurrentHashMap<Long, ConnectSlot>()
     private val activeFwdUdpSessions = AtomicInteger(0)
@@ -313,7 +307,7 @@ object SlipstreamSocksBridge {
             "connectPermits=${connectSemaphore.availablePermits()}/$MAX_CONCURRENT_CONNECTS " +
             "connectCircuitOpen=${now < connectCircuitOpenUntil} dnsCircuitOpen=${now < circuitOpenUntil} " +
             "relayIdleTimeoutMs=$relayIdleTimeoutMs " +
-            "uploadQueueGuard=${if (uploadLimiter == null) DEFAULT_UPLOAD_QUEUE_GUARD_BYTES_PER_SECOND else 0} " +
+            "uploadLimiter=${uploadLimiter?.bytesPerSecond ?: 0} " +
             "activeFwdUdp=${activeFwdUdpSessions.get()} lastDnsSuccessMs=${lastDnsSuccessMs.get()} " +
             "tx=${tunnelTxBytes.get()} rx=${tunnelRxBytes.get()} slots=$slotSummary fwdUdp=$fwdUdpSummary"
     }
@@ -1260,7 +1254,7 @@ object SlipstreamSocksBridge {
                             clientInput,
                             remoteOutput,
                             tunnelTxBytes,
-                            effectiveUploadLimiter(),
+                            uploadLimiter,
                             slot,
                             RelayDirection.CLIENT_TO_REMOTE
                         )
@@ -1324,7 +1318,7 @@ object SlipstreamSocksBridge {
 
             val t1 = Thread({
                 try {
-                    copyStream(clientInput, remoteOutput, limiter = effectiveUploadLimiter())
+                    copyStream(clientInput, remoteOutput, limiter = uploadLimiter)
                 } catch (_: Exception) {
                 } finally {
                     try { remoteOutput.close() } catch (_: Exception) {}
@@ -1714,9 +1708,6 @@ object SlipstreamSocksBridge {
             else -> null
         }
     }
-
-    private fun effectiveUploadLimiter(): RateLimiter =
-        uploadLimiter ?: uploadQueueGuardLimiter
 
     private fun abortSocket(socket: Socket) {
         try { socket.setSoLinger(true, 0) } catch (_: Exception) {}

@@ -1283,29 +1283,67 @@ class SlipNetVpnService : VpnService() {
     private fun dumpSlipstreamState(reason: String) {
         val cm = connectivityManager ?: getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
         val network = cm?.activeNetwork
+        val caps = network?.let { cm.getNetworkCapabilities(it) }
+        val link = network?.let { cm.getLinkProperties(it) }
         val dnsServers = network
-            ?.let { cm.getLinkProperties(it) }
+            ?.let { link }
             ?.dnsServers
             ?.joinToString(",") { it.hostAddress ?: it.toString() }
             ?: "unknown"
+        val transports = listOf(
+            NetworkCapabilities.TRANSPORT_CELLULAR to "cell",
+            NetworkCapabilities.TRANSPORT_WIFI to "wifi",
+            NetworkCapabilities.TRANSPORT_ETHERNET to "eth",
+            NetworkCapabilities.TRANSPORT_VPN to "vpn"
+        ).filter { (transport, _) -> caps?.hasTransport(transport) == true }
+            .joinToString(",") { it.second }
+            .ifBlank { "unknown" }
+        val capabilities = if (caps != null) {
+            "internet=${caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)} " +
+                "validated=${caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)} " +
+                "notVpn=${caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)} " +
+                "transports=$transports"
+        } else {
+            "unknown"
+        }
         Log.i(
             TAG,
-            "Slipstream dump reason=$reason health=$slipstreamHealthState network=$network dns=$dnsServers " +
+            "Slipstream dump reason=$reason health=$slipstreamHealthState network=$network caps={$capabilities} dns=$dnsServers " +
+                "iface=${link?.interfaceName ?: "unknown"} routes=${link?.routes?.size ?: -1} " +
                 "native={${SlipstreamBridge.dumpState(reason)}} bridge={${SlipstreamSocksBridge.dumpState(reason)}}"
         )
+    }
+
+    private data class SlipstreamStartupHealthcheckResult(
+        val ok: Boolean,
+        val stage: String,
+        val detail: String,
+        val dnsHost: String
+    ) {
+        fun describe(): String = "dns=$dnsHost stage=$stage detail=$detail"
     }
 
     private suspend fun runSlipstreamStartupHealthcheck(
         proxyHost: String,
         proxyPort: Int,
         dnsHost: String
-    ): Boolean = withContext(Dispatchers.IO) {
+    ): SlipstreamStartupHealthcheckResult = withContext(Dispatchers.IO) {
+        fun fail(stage: String, detail: String): SlipstreamStartupHealthcheckResult {
+            val result = SlipstreamStartupHealthcheckResult(false, stage, detail, dnsHost)
+            Log.w(TAG, "Slipstream startup healthcheck failed: ${result.describe()} native={${SlipstreamBridge.dumpState("startup-healthcheck-$stage")}} bridge={${SlipstreamSocksBridge.dumpState("startup-healthcheck-$stage")}}")
+            return result
+        }
+
         try {
             val authEnabled = preferencesDataStore.proxyAuthEnabled.first()
             val authUser = if (authEnabled) preferencesDataStore.proxyAuthUsername.first().ifEmpty { null } else null
             val authPass = if (authEnabled) preferencesDataStore.proxyAuthPassword.first().ifEmpty { null } else null
             java.net.Socket().use { socket ->
-                socket.connect(java.net.InetSocketAddress(proxyHost, proxyPort), 3000)
+                try {
+                    socket.connect(java.net.InetSocketAddress(proxyHost, proxyPort), 3000)
+                } catch (e: Exception) {
+                    return@withContext fail("bridge_connect", "${e.javaClass.simpleName}:${e.message ?: "no-message"}")
+                }
                 socket.soTimeout = 3000
                 socket.tcpNoDelay = true
                 val input = socket.getInputStream()
@@ -1318,11 +1356,20 @@ class SlipNetVpnService : VpnService() {
                 }
                 output.flush()
                 val greeting = ByteArray(2)
-                readFully(input, greeting)
-                if (greeting[0] != 0x05.toByte() || greeting[1] == 0xFF.toByte()) return@withContext false
+                try {
+                    readFully(input, greeting)
+                } catch (e: Exception) {
+                    return@withContext fail("socks_greeting_read", "${e.javaClass.simpleName}:${e.message ?: "no-message"}")
+                }
+                if (greeting[0] != 0x05.toByte() || greeting[1] == 0xFF.toByte()) {
+                    return@withContext fail(
+                        "socks_greeting_bad",
+                        "version=${greeting[0].toInt() and 0xFF} method=${greeting[1].toInt() and 0xFF} authEnabled=$authEnabled"
+                    )
+                }
 
                 if (greeting[1] == 0x02.toByte()) {
-                    if (authUser == null || authPass == null) return@withContext false
+                    if (authUser == null || authPass == null) return@withContext fail("socks_auth_missing", "server requested username/password")
                     val user = authUser.toByteArray()
                     val pass = authPass.toByteArray()
                     val authReq = ByteArray(3 + user.size + pass.size)
@@ -1334,24 +1381,39 @@ class SlipNetVpnService : VpnService() {
                     output.write(authReq)
                     output.flush()
                     val authResp = ByteArray(2)
-                    readFully(input, authResp)
-                    if (authResp[1] != 0x00.toByte()) return@withContext false
+                    try {
+                        readFully(input, authResp)
+                    } catch (e: Exception) {
+                        return@withContext fail("socks_auth_read", "${e.javaClass.simpleName}:${e.message ?: "no-message"}")
+                    }
+                    if (authResp[1] != 0x00.toByte()) {
+                        return@withContext fail("socks_auth_rejected", "status=${authResp[1].toInt() and 0xFF}")
+                    }
                 }
 
                 output.write(buildSocksConnectRequest(dnsHost, 53))
                 output.flush()
                 val connectHeader = ByteArray(4)
-                readFully(input, connectHeader)
-                if (connectHeader[1] != 0x00.toByte()) return@withContext false
+                try {
+                    readFully(input, connectHeader)
+                } catch (e: Exception) {
+                    return@withContext fail("dns_connect_read", "${e.javaClass.simpleName}:${e.message ?: "no-message"}")
+                }
+                if (connectHeader[1] != 0x00.toByte()) {
+                    return@withContext fail(
+                        "dns_connect_rejected",
+                        "rep=${connectHeader[1].toInt() and 0xFF} atyp=${connectHeader[3].toInt() and 0xFF}"
+                    )
+                }
                 when (connectHeader[3].toInt() and 0xFF) {
                     0x01 -> readFully(input, ByteArray(6))
                     0x03 -> {
                         val len = input.read()
-                        if (len < 0) return@withContext false
+                        if (len < 0) return@withContext fail("dns_connect_addr", "eof reading domain length")
                         readFully(input, ByteArray(len + 2))
                     }
                     0x04 -> readFully(input, ByteArray(18))
-                    else -> return@withContext false
+                    else -> return@withContext fail("dns_connect_addr", "unknown atyp=${connectHeader[3].toInt() and 0xFF}")
                 }
 
                 val query = buildDnsHealthcheckQuery()
@@ -1359,16 +1421,34 @@ class SlipNetVpnService : VpnService() {
                 output.write(query)
                 output.flush()
                 val lenBytes = ByteArray(2)
-                readFully(input, lenBytes)
+                try {
+                    readFully(input, lenBytes)
+                } catch (e: Exception) {
+                    return@withContext fail("dns_response_len_read", "${e.javaClass.simpleName}:${e.message ?: "no-message"}")
+                }
                 val responseLen = ((lenBytes[0].toInt() and 0xFF) shl 8) or (lenBytes[1].toInt() and 0xFF)
-                if (responseLen < 12 || responseLen > 4096) return@withContext false
+                if (responseLen < 12 || responseLen > 4096) {
+                    return@withContext fail("dns_response_len_bad", "responseLen=$responseLen")
+                }
                 val response = ByteArray(responseLen)
-                readFully(input, response)
-                response[0] == query[0] && response[1] == query[1]
+                try {
+                    readFully(input, response)
+                } catch (e: Exception) {
+                    return@withContext fail("dns_response_read", "${e.javaClass.simpleName}:${e.message ?: "no-message"} len=$responseLen")
+                }
+                if (response[0] == query[0] && response[1] == query[1]) {
+                    val result = SlipstreamStartupHealthcheckResult(true, "ok", "dns response len=$responseLen", dnsHost)
+                    Log.i(TAG, "Slipstream startup healthcheck OK: ${result.describe()}")
+                    result
+                } else {
+                    fail(
+                        "dns_response_id_mismatch",
+                        "expected=${query[0].toInt() and 0xFF}.${query[1].toInt() and 0xFF} got=${response[0].toInt() and 0xFF}.${response[1].toInt() and 0xFF} len=$responseLen"
+                    )
+                }
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Slipstream startup healthcheck failed: ${e.message}")
-            false
+            fail("exception", "${e.javaClass.simpleName}:${e.message ?: "no-message"}")
         }
     }
 
@@ -1506,12 +1586,19 @@ class SlipNetVpnService : VpnService() {
             return
         }
 
-        val healthcheckOk = runSlipstreamStartupHealthcheck(proxyHost, proxyPort, remoteDns) ||
-            (remoteDnsFallback != remoteDns && runSlipstreamStartupHealthcheck(proxyHost, proxyPort, remoteDnsFallback))
+        val primaryHealthcheck = runSlipstreamStartupHealthcheck(proxyHost, proxyPort, remoteDns)
+        val fallbackHealthcheck = if (!primaryHealthcheck.ok && remoteDnsFallback != remoteDns) {
+            runSlipstreamStartupHealthcheck(proxyHost, proxyPort, remoteDnsFallback)
+        } else {
+            null
+        }
+        val healthcheckOk = primaryHealthcheck.ok || fallbackHealthcheck?.ok == true
         if (!healthcheckOk) {
-            setSlipstreamHealthState(TunnelHealthState.FAILED, "startup healthcheck failed")
+            val detail = listOfNotNull(primaryHealthcheck, fallbackHealthcheck)
+                .joinToString(" | ") { it.describe() }
+            setSlipstreamHealthState(TunnelHealthState.FAILED, "startup healthcheck failed: $detail")
             dumpSlipstreamState("startup-healthcheck-failed")
-            connectionManager.onVpnError("Slipstream tunnel healthcheck failed")
+            connectionManager.onVpnError("Slipstream tunnel healthcheck failed: $detail")
             stopCurrentProxy()
             SlipstreamBridge.setVpnService(null)
             stopForeground(STOP_FOREGROUND_REMOVE)

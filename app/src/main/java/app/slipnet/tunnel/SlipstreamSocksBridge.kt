@@ -147,12 +147,15 @@ object SlipstreamSocksBridge {
     private const val FWD_UDP_IDLE_TIMEOUT_MS = 1_000
 
     // CONNECT concurrency limit and circuit breaker
-    private const val MAX_CONCURRENT_CONNECTS = 8
+    private const val MAX_CONCURRENT_CONNECTS = 6
+    private const val MAX_ACTIVE_CONNECT_SLOTS = 12
     private const val CONNECT_CIRCUIT_THRESHOLD = 3
     private const val CONNECT_CIRCUIT_COOLDOWN_MS = 5000L
+    @Volatile var connectCircuitOpenCallback: ((String) -> Unit)? = null
     @Volatile private var connectSemaphore = Semaphore(MAX_CONCURRENT_CONNECTS)
     private val connectFailures = AtomicInteger(0)
     @Volatile private var connectCircuitOpenUntil: Long = 0
+    private val connectCircuitCallbackSent = AtomicBoolean(false)
     private val nextConnectSlotId = AtomicLong(1)
     private val connectSlots = ConcurrentHashMap<Long, ConnectSlot>()
     private val activeFwdUdpSessions = AtomicInteger(0)
@@ -193,6 +196,7 @@ object SlipstreamSocksBridge {
         if (connectFailures.get() >= CONNECT_CIRCUIT_THRESHOLD) {
             connectFailures.set(0)
         }
+        connectCircuitCallbackSent.set(false)
         return false
     }
 
@@ -202,12 +206,26 @@ object SlipstreamSocksBridge {
 
     private fun recordConnectSuccess() {
         connectFailures.set(0)
+        connectCircuitCallbackSent.set(false)
         lastConnectSuccessMs.set(System.currentTimeMillis())
     }
     private fun recordConnectFailure() {
         if (connectFailures.incrementAndGet() >= CONNECT_CIRCUIT_THRESHOLD) {
             connectCircuitOpenUntil = System.currentTimeMillis() + CONNECT_CIRCUIT_COOLDOWN_MS
+            notifyConnectCircuitOpen()
             logd("CONNECT: circuit breaker OPEN — cooling down ${CONNECT_CIRCUIT_COOLDOWN_MS}ms")
+        }
+    }
+
+    private fun notifyConnectCircuitOpen() {
+        val reason = "CONNECT circuit breaker open after ${connectFailures.get()} failures"
+        Log.w(TAG, "$reason; ${dumpState("connect-circuit-open")}")
+        if (connectCircuitCallbackSent.compareAndSet(false, true)) {
+            try {
+                connectCircuitOpenCallback?.invoke(reason)
+            } catch (e: Exception) {
+                Log.w(TAG, "CONNECT circuit callback failed: ${e.message}")
+            }
         }
     }
 
@@ -347,6 +365,7 @@ object SlipstreamSocksBridge {
         circuitOpenUntil = 0
         connectFailures.set(0)
         connectCircuitOpenUntil = 0
+        connectCircuitCallbackSent.set(false)
         lastConnectSuccessMs.set(0)
         lastDnsSuccessMs.set(0)
         activeFwdUdpSessions.set(0)
@@ -481,6 +500,7 @@ object SlipstreamSocksBridge {
         circuitOpenUntil = 0
         connectFailures.set(0)
         connectCircuitOpenUntil = 0
+        connectCircuitCallbackSent.set(false)
         lastDnsSuccessMs.set(0)
         lastConnectSuccessMs.set(0)
         connectSemaphore = Semaphore(MAX_CONCURRENT_CONNECTS)
@@ -1088,8 +1108,8 @@ object SlipstreamSocksBridge {
             } catch (_: Exception) {}
         }
 
-        val slot = registerConnectSlot(destHost, destPort)
         val semaphore = connectSemaphore
+        var slot: ConnectSlot? = null
         var closeReason = "unknown"
 
         // Fail fast if Slipstream tunnel is dead
@@ -1097,16 +1117,30 @@ object SlipstreamSocksBridge {
             closeReason = "native_not_running"
             logd("CONNECT: Slipstream not running, rejecting $destHost:$destPort")
             writeFailure(0x04)
-            closeConnectSlot(slot, closeReason, forceClosed = !running.get())
             return
         }
 
         // CONNECT circuit breaker: tunnel is overwhelmed, reject immediately
         if (isConnectCircuitOpen()) {
             closeReason = "connect_circuit_open"
-            logd("CONNECT: circuit open, rejecting $destHost:$destPort")
+            Log.w(TAG, "CONNECT: circuit open, rejecting $destHost:$destPort; ${dumpState("connect-circuit-reject")}")
             writeFailure(0x05)
-            closeConnectSlot(slot, closeReason, forceClosed = !running.get())
+            return
+        }
+
+        val activeSlotWaitUntil = System.currentTimeMillis() + 1500
+        while (connectSlots.size >= MAX_ACTIVE_CONNECT_SLOTS && System.currentTimeMillis() < activeSlotWaitUntil) {
+            try {
+                Thread.sleep(50)
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                break
+            }
+        }
+        if (connectSlots.size >= MAX_ACTIVE_CONNECT_SLOTS) {
+            closeReason = "active_connect_limit"
+            Log.w(TAG, "CONNECT: active slot limit ($MAX_ACTIVE_CONNECT_SLOTS), rejecting $destHost:$destPort; ${dumpState("connect-active-limit")}")
+            writeFailure(0x05)
             return
         }
 
@@ -1117,10 +1151,10 @@ object SlipstreamSocksBridge {
             closeReason = "connect_capacity_timeout"
             Log.w(TAG, "CONNECT: at capacity ($MAX_CONCURRENT_CONNECTS), rejecting $destHost:$destPort; ${dumpState("connect-capacity")}")
             writeFailure(0x05)
-            closeConnectSlot(slot, closeReason, forceClosed = !running.get())
             return
         }
 
+        slot = registerConnectSlot(destHost, destPort)
         var semaphoreReleased = false
         val remoteSocket: Socket
         try {

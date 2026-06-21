@@ -225,6 +225,16 @@ class SlipNetVpnService : VpnService() {
         super.onCreate()
         connectivityManager = getSystemService(ConnectivityManager::class.java)
         prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        SlipstreamSocksBridge.connectCircuitOpenCallback = { reason ->
+            if (currentTunnelType == TunnelType.SLIPSTREAM || currentTunnelType == TunnelType.SLIPSTREAM_SSH) {
+                Log.e(TAG, "Slipstream CONNECT circuit opened, triggering recovery: $reason")
+                setSlipstreamHealthState(TunnelHealthState.DEGRADED, reason)
+                dumpSlipstreamState("connect-circuit-open-callback")
+                serviceScope.launch {
+                    handleTunnelFailure(reason)
+                }
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -5956,6 +5966,7 @@ class SlipNetVpnService : VpnService() {
 
     override fun onDestroy() {
         Log.i(TAG, "Service onDestroy")
+        SlipstreamSocksBridge.connectCircuitOpenCallback = null
 
         // Capture state before cleanup resets currentProfileId to -1
         val wasActive = currentProfileId != -1L

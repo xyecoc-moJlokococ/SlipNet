@@ -1344,7 +1344,7 @@ class SlipNetVpnService : VpnService() {
                 } catch (e: Exception) {
                     return@withContext fail("bridge_connect", "${e.javaClass.simpleName}:${e.message ?: "no-message"}")
                 }
-                socket.soTimeout = 3000
+                socket.soTimeout = 20_000
                 socket.tcpNoDelay = true
                 val input = socket.getInputStream()
                 val output = socket.getOutputStream()
@@ -1391,44 +1391,60 @@ class SlipNetVpnService : VpnService() {
                     }
                 }
 
-                output.write(buildSocksConnectRequest(dnsHost, 53))
+                output.write(buildSocksRequest(0x05, dnsHost, 53))
                 output.flush()
-                val connectHeader = ByteArray(4)
+                val fwdUdpHeader = ByteArray(4)
                 try {
-                    readFully(input, connectHeader)
+                    readFully(input, fwdUdpHeader)
                 } catch (e: Exception) {
-                    return@withContext fail("dns_connect_read", "${e.javaClass.simpleName}:${e.message ?: "no-message"}")
+                    return@withContext fail("fwd_udp_read", "${e.javaClass.simpleName}:${e.message ?: "no-message"}")
                 }
-                if (connectHeader[1] != 0x00.toByte()) {
+                if (fwdUdpHeader[1] != 0x00.toByte()) {
                     return@withContext fail(
-                        "dns_connect_rejected",
-                        "rep=${connectHeader[1].toInt() and 0xFF} atyp=${connectHeader[3].toInt() and 0xFF}"
+                        "fwd_udp_rejected",
+                        "rep=${fwdUdpHeader[1].toInt() and 0xFF} atyp=${fwdUdpHeader[3].toInt() and 0xFF}"
                     )
                 }
-                when (connectHeader[3].toInt() and 0xFF) {
+                when (fwdUdpHeader[3].toInt() and 0xFF) {
                     0x01 -> readFully(input, ByteArray(6))
                     0x03 -> {
                         val len = input.read()
-                        if (len < 0) return@withContext fail("dns_connect_addr", "eof reading domain length")
+                        if (len < 0) return@withContext fail("fwd_udp_addr", "eof reading domain length")
                         readFully(input, ByteArray(len + 2))
                     }
                     0x04 -> readFully(input, ByteArray(18))
-                    else -> return@withContext fail("dns_connect_addr", "unknown atyp=${connectHeader[3].toInt() and 0xFF}")
+                    else -> return@withContext fail("fwd_udp_addr", "unknown atyp=${fwdUdpHeader[3].toInt() and 0xFF}")
                 }
 
                 val query = buildDnsHealthcheckQuery()
-                output.write(byteArrayOf(((query.size shr 8) and 0xFF).toByte(), (query.size and 0xFF).toByte()))
+                val addrBytes = buildSocksAddress(dnsHost, 53)
+                val packetHeader = byteArrayOf(
+                    ((query.size shr 8) and 0xFF).toByte(),
+                    (query.size and 0xFF).toByte(),
+                    (3 + addrBytes.size).toByte()
+                )
+                output.write(packetHeader)
+                output.write(addrBytes)
                 output.write(query)
                 output.flush()
-                val lenBytes = ByteArray(2)
+                val responseHeader = ByteArray(3)
                 try {
-                    readFully(input, lenBytes)
+                    readFully(input, responseHeader)
                 } catch (e: Exception) {
-                    return@withContext fail("dns_response_len_read", "${e.javaClass.simpleName}:${e.message ?: "no-message"}")
+                    return@withContext fail("dns_fwd_udp_header_read", "${e.javaClass.simpleName}:${e.message ?: "no-message"}")
                 }
-                val responseLen = ((lenBytes[0].toInt() and 0xFF) shl 8) or (lenBytes[1].toInt() and 0xFF)
+                val responseLen = ((responseHeader[0].toInt() and 0xFF) shl 8) or (responseHeader[1].toInt() and 0xFF)
+                val responseAddrLen = (responseHeader[2].toInt() and 0xFF) - 3
                 if (responseLen < 12 || responseLen > 4096) {
                     return@withContext fail("dns_response_len_bad", "responseLen=$responseLen")
+                }
+                if (responseAddrLen <= 0 || responseAddrLen > 260) {
+                    return@withContext fail("dns_response_addr_len_bad", "responseAddrLen=$responseAddrLen")
+                }
+                try {
+                    readFully(input, ByteArray(responseAddrLen))
+                } catch (e: Exception) {
+                    return@withContext fail("dns_response_addr_read", "${e.javaClass.simpleName}:${e.message ?: "no-message"} len=$responseAddrLen")
                 }
                 val response = ByteArray(responseLen)
                 try {
@@ -1452,18 +1468,20 @@ class SlipNetVpnService : VpnService() {
         }
     }
 
-    private fun buildSocksConnectRequest(host: String, port: Int): ByteArray {
+    private fun buildSocksRequest(command: Int, host: String, port: Int): ByteArray =
+        byteArrayOf(0x05, command.toByte(), 0x00) + buildSocksAddress(host, port)
+
+    private fun buildSocksAddress(host: String, port: Int): ByteArray {
         val portBytes = byteArrayOf(((port shr 8) and 0xFF).toByte(), (port and 0xFF).toByte())
         val parts = host.split(".")
-        val addr = if (parts.size == 4 && parts.all { part ->
+        return if (parts.size == 4 && parts.all { part ->
                 part.toIntOrNull()?.let { value -> value in 0..255 } == true
             }) {
-            byteArrayOf(0x01) + parts.map { it.toInt().toByte() }.toByteArray()
+            byteArrayOf(0x01) + parts.map { it.toInt().toByte() }.toByteArray() + portBytes
         } else {
             val domain = host.toByteArray()
-            byteArrayOf(0x03, domain.size.toByte()) + domain
+            byteArrayOf(0x03, domain.size.toByte()) + domain + portBytes
         }
-        return byteArrayOf(0x05, 0x01, 0x00) + addr + portBytes
     }
 
     private fun buildDnsHealthcheckQuery(): ByteArray =

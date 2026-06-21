@@ -759,7 +759,9 @@ object SlipstreamSocksBridge {
                 return tcpResult
             }
             recordDnsFailure()
-            return null
+            val dohResult = forwardDnsDoH(payload)
+            if (dohResult != null) recordDnsSuccess()
+            return dohResult
         }
 
         val startIdx = (dnsRoundRobin.getAndIncrement() and 0x7FFFFFFF) % poolSize

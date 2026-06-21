@@ -189,6 +189,11 @@ object SlipstreamSocksBridge {
         REMOTE_TO_CLIENT
     }
 
+    private enum class CopyExit {
+        EOF,
+        INTERRUPTED
+    }
+
     private fun isConnectCircuitOpen(): Boolean {
         if (System.currentTimeMillis() < connectCircuitOpenUntil) return true
         if (connectFailures.get() >= CONNECT_CIRCUIT_THRESHOLD) {
@@ -1249,8 +1254,9 @@ object SlipstreamSocksBridge {
             // Bridge bidirectionally
             remoteSocket.use { remote ->
                 val t1 = Thread({
+                    var exit = CopyExit.INTERRUPTED
                     try {
-                        copyStream(
+                        exit = copyStream(
                             clientInput,
                             remoteOutput,
                             tunnelTxBytes,
@@ -1261,7 +1267,14 @@ object SlipstreamSocksBridge {
                     } catch (e: Exception) {
                         logd("slip-bridge-c2s: ${e.message}")
                     } finally {
-                        try { remote.shutdownOutput() } catch (_: Exception) {}
+                        if (exit == CopyExit.EOF) {
+                            // The app closed its side (for example speedtest moved to the
+                            // next phase). Abort the upstream socket so stale download data
+                            // cannot keep filling the tunnel after the client is gone.
+                            abortSocket(remote)
+                        } else {
+                            try { remote.shutdownOutput() } catch (_: Exception) {}
+                        }
                     }
                 }, "slip-bridge-c2s")
                 t1.isDaemon = true
@@ -1280,6 +1293,7 @@ object SlipstreamSocksBridge {
                     logd("slip-bridge-s2c: ${e.message}")
                 } finally {
                     try { clientSocket.shutdownOutput() } catch (_: Exception) {}
+                    try { remote.close() } catch (_: Exception) {}
                     t1.join(5000)
                     try { remote.close() } catch (_: Exception) {}
                     remoteSockets.remove(remote)
@@ -1704,6 +1718,11 @@ object SlipstreamSocksBridge {
     private fun effectiveUploadLimiter(): RateLimiter =
         uploadLimiter ?: uploadQueueGuardLimiter
 
+    private fun abortSocket(socket: Socket) {
+        try { socket.setSoLinger(true, 0) } catch (_: Exception) {}
+        try { socket.close() } catch (_: Exception) {}
+    }
+
     private fun copyStream(
         input: InputStream,
         output: OutputStream,
@@ -1711,14 +1730,14 @@ object SlipstreamSocksBridge {
         limiter: RateLimiter? = null,
         slot: ConnectSlot? = null,
         direction: RelayDirection? = null
-    ) {
+    ): CopyExit {
         val buffer = ByteArray(BUFFER_SIZE)
         val maxRead = if (limiter != null && limiter.bytesPerSecond > 0) {
             (limiter.bytesPerSecond / 4).toInt().coerceIn(1024, BUFFER_SIZE)
         } else BUFFER_SIZE
         while (!Thread.currentThread().isInterrupted) {
             val bytesRead = input.read(buffer, 0, maxRead)
-            if (bytesRead == -1) break
+            if (bytesRead == -1) return CopyExit.EOF
             limiter?.acquire(bytesRead)
             output.write(buffer, 0, bytesRead)
             output.flush()
@@ -1731,6 +1750,7 @@ object SlipstreamSocksBridge {
                 }
             }
         }
+        return CopyExit.INTERRUPTED
     }
 
     private fun InputStream.readFully(buffer: ByteArray) {

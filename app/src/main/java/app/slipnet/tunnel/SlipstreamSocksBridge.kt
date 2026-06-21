@@ -52,8 +52,9 @@ object SlipstreamSocksBridge {
     private const val BIND_RETRY_DELAY_MS = 200L
     private const val BUFFER_SIZE = 65536  // 64KB for better throughput (was 32KB)
     private const val TCP_CONNECT_TIMEOUT_MS = 10000
-    private const val RELAY_IDLE_TIMEOUT_MS = 300_000  // 5 min idle timeout for relay sockets
-    private const val DEFAULT_UPLOAD_QUEUE_GUARD_BYTES_PER_SECOND = 64L * 1024L
+    private const val RELAY_IDLE_TIMEOUT_MS = 60_000  // keep stale relay sockets from hoarding stream credit
+    private const val DEFAULT_UPLOAD_QUEUE_GUARD_BYTES_PER_SECOND = 24L * 1024L
+    private const val DEFAULT_UPLOAD_QUEUE_GUARD_BURST_SECONDS = 0.25
     private const val DNS_POOL_SIZE_MAX = 10  // max possible pool for array allocation
     private val dnsPoolSize: Int get() = dnsWorkerPoolSize.coerceAtLeast(0)
     private const val DNS_KEEPALIVE_INTERVAL_MS = 20_000L
@@ -153,7 +154,10 @@ object SlipstreamSocksBridge {
     @Volatile private var connectSemaphore = Semaphore(MAX_CONCURRENT_CONNECTS)
     private val connectFailures = AtomicInteger(0)
     @Volatile private var connectCircuitOpenUntil: Long = 0
-    private val uploadQueueGuardLimiter = RateLimiter(DEFAULT_UPLOAD_QUEUE_GUARD_BYTES_PER_SECOND)
+    private val uploadQueueGuardLimiter = RateLimiter(
+        DEFAULT_UPLOAD_QUEUE_GUARD_BYTES_PER_SECOND,
+        DEFAULT_UPLOAD_QUEUE_GUARD_BURST_SECONDS
+    )
     private val nextConnectSlotId = AtomicLong(1)
     private val connectSlots = ConcurrentHashMap<Long, ConnectSlot>()
     private val activeFwdUdpSessions = AtomicInteger(0)

@@ -10,19 +10,22 @@ package app.slipnet.tunnel
  *
  * @param bytesPerSecond Maximum throughput in bytes/sec. 0 = unlimited.
  */
-class RateLimiter(bytesPerSecond: Long) {
+class RateLimiter(
+    bytesPerSecond: Long,
+    private val burstWindowSeconds: Double = 1.0
+) {
     @Volatile
     var bytesPerSecond: Long = bytesPerSecond
         set(value) {
             field = value
             synchronized(lock) {
-                tokens = value.toDouble()
+                tokens = burstCapacity(value)
                 lastRefillNanos = System.nanoTime()
             }
         }
 
     private val lock = Any()
-    private var tokens: Double = bytesPerSecond.toDouble()
+    private var tokens: Double = burstCapacity(bytesPerSecond)
     private var lastRefillNanos: Long = System.nanoTime()
 
     /**
@@ -53,9 +56,13 @@ class RateLimiter(bytesPerSecond: Long) {
         if (elapsed <= 0) return
         val rate = bytesPerSecond
         val newTokens = (elapsed.toDouble() / 1_000_000_000.0) * rate
-        // Cap at 1 second of burst to prevent accumulating huge allowances during idle.
+        // Cap burst accumulation so low-rate guards do not dump a full second of
+        // data into tiny transports after an idle period.
         // Negative tokens (debt from large reads) are recovered naturally through refill.
-        tokens = (tokens + newTokens).coerceAtMost(rate.toDouble())
+        tokens = (tokens + newTokens).coerceAtMost(burstCapacity(rate))
         lastRefillNanos = now
     }
+
+    private fun burstCapacity(rate: Long): Double =
+        (rate.toDouble() * burstWindowSeconds.coerceAtLeast(0.05)).coerceAtLeast(1024.0)
 }

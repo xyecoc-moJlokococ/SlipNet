@@ -31,6 +31,9 @@ data class KotlinTunnelConfig(
     val bufferSize: Int = 524288, // 512KB
     val connectionPoolSize: Int = 10,
     val verboseLogging: Boolean = false,
+    val socksUsername: String? = null,
+    val socksPassword: String? = null,
+    val forwardNonDnsUdpDirect: Boolean = false,
     // DNS forwarding through SSH (for SSH-only mode)
     // When > 0, DNS queries are sent via TCP to this local port (SSH port-forwarded)
     val dnsForwardPort: Int = 0
@@ -90,7 +93,9 @@ class KotlinTunnelManager(
         scope = scope,
         bufferSize = config.bufferSize,
         connectionTimeout = config.connectionTimeout,
-        verboseLogging = config.verboseLogging
+        verboseLogging = config.verboseLogging,
+        socksUsername = config.socksUsername,
+        socksPassword = config.socksPassword
     )
 
     // Stats
@@ -394,6 +399,11 @@ class KotlinTunnelManager(
 
         val srcAddr = ipPacket.srcAddress
         val dstAddr = ipPacket.dstAddress
+
+        if (!config.forwardNonDnsUdpDirect) {
+            if (verboseLogging) Log.v(TAG, "Dropping non-DNS UDP $srcPort->$dstPort to force TCP fallback")
+            return
+        }
 
         // Create a unique key for this UDP "session" - use a more efficient format
         val sessionKey = "${srcAddr.hashCode()}:$srcPort->${dstAddr.hashCode()}:$dstPort"
@@ -1303,14 +1313,17 @@ class Socks5ConnectionPool(
     private val scope: CoroutineScope,
     private val bufferSize: Int = 524288,
     private val connectionTimeout: Int = 30000,
-    private val verboseLogging: Boolean = false
+    private val verboseLogging: Boolean = false,
+    private val socksUsername: String? = null,
+    private val socksPassword: String? = null
 ) {
     companion object {
         private const val TAG = "DirectPool"
     }
 
-    // Pool of pre-connected sockets (just TCP connected, no protocol yet)
-    private val pool = java.util.concurrent.LinkedBlockingQueue<PooledSocket>(poolSize)
+    // Pool of pre-connected sockets (just TCP connected, no protocol yet).
+    // SOCKS5 CONNECT currently uses fresh sockets, so callers may set poolSize=0.
+    private val pool = java.util.concurrent.LinkedBlockingQueue<PooledSocket>(poolSize.coerceAtLeast(1))
     private val isRunning = AtomicBoolean(false)
     private var replenishJob: Job? = null
 
@@ -1330,6 +1343,10 @@ class Socks5ConnectionPool(
     fun start() {
         if (isRunning.getAndSet(true)) return
         if (verboseLogging) Log.i(TAG, "Starting connection pool (size=$poolSize)")
+        if (poolSize <= 0) {
+            if (verboseLogging) Log.i(TAG, "Connection pool disabled")
+            return
+        }
 
         // Initial pool fill
         scope.launch(Dispatchers.IO) {
@@ -1465,8 +1482,10 @@ class Socks5ConnectionPool(
                 // Use configured connection timeout for handshake (with some buffer for slow DNS tunnels)
                 socket.soTimeout = (connectionTimeout * 1.5).toInt().coerceAtLeast(30000)
 
-                // Step 1: Send SOCKS5 greeting (version 5, 1 auth method, no auth)
-                output.write(byteArrayOf(0x05, 0x01, 0x00))
+                val hasAuth = !socksUsername.isNullOrBlank() && !socksPassword.isNullOrBlank()
+
+                // Step 1: Send SOCKS5 greeting
+                output.write(if (hasAuth) byteArrayOf(0x05, 0x01, 0x02) else byteArrayOf(0x05, 0x01, 0x00))
                 output.flush()
 
                 // Step 2: Read auth response
@@ -1477,10 +1496,36 @@ class Socks5ConnectionPool(
                     return@withContext null
                 }
 
-                if (authResponse[0] != 0x05.toByte() || authResponse[1] != 0x00.toByte()) {
+                val expectedMethod = if (hasAuth) 0x02.toByte() else 0x00.toByte()
+                if (authResponse[0] != 0x05.toByte() || authResponse[1] != expectedMethod) {
                     Log.e(TAG, "[$streamId] SOCKS5: Auth rejected (ver=${authResponse[0]}, method=${authResponse[1]})")
                     socket.close()
                     return@withContext null
+                }
+
+                if (hasAuth) {
+                    val user = socksUsername!!.toByteArray(Charsets.UTF_8)
+                    val pass = socksPassword!!.toByteArray(Charsets.UTF_8)
+                    if (user.size > 255 || pass.size > 255) {
+                        Log.e(TAG, "[$streamId] SOCKS5: Username/password too long")
+                        socket.close()
+                        return@withContext null
+                    }
+                    val authRequest = ByteArray(3 + user.size + pass.size)
+                    authRequest[0] = 0x01
+                    authRequest[1] = user.size.toByte()
+                    System.arraycopy(user, 0, authRequest, 2, user.size)
+                    authRequest[2 + user.size] = pass.size.toByte()
+                    System.arraycopy(pass, 0, authRequest, 3 + user.size, pass.size)
+                    output.write(authRequest)
+                    output.flush()
+
+                    val authStatus = ByteArray(2)
+                    if (readFully(input, authStatus) != 2 || authStatus[1] != 0x00.toByte()) {
+                        Log.e(TAG, "[$streamId] SOCKS5: Username/password auth failed")
+                        socket.close()
+                        return@withContext null
+                    }
                 }
 
                 // Step 3: Send CONNECT request

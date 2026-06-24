@@ -22,6 +22,7 @@ import app.slipnet.tunnel.ResolverConfig
 import app.slipnet.tunnel.SlipstreamBridge
 import app.slipnet.tunnel.DnsttSocksBridge
 import app.slipnet.tunnel.SlipstreamSocksBridge
+import app.slipnet.tunnel.SlipstreamTunBridge
 import app.slipnet.tunnel.NaiveBridge
 import app.slipnet.tunnel.NaiveSocksBridge
 import app.slipnet.tunnel.SnowflakeBridge
@@ -987,6 +988,7 @@ class VpnRepositoryImpl @Inject constructor(
         when (currentTunnelType) {
             TunnelType.SLIPSTREAM -> {
                 Log.d(TAG, "Stopping Slipstream proxy and bridge")
+                SlipstreamTunBridge.stop()
                 SlipstreamSocksBridge.stop()
                 SlipstreamBridge.stopClient()
             }
@@ -1063,6 +1065,7 @@ class VpnRepositoryImpl @Inject constructor(
                 // Try to stop all just in case
                 Log.d(TAG, "No tunnel type set, stopping all proxies")
                 SlipstreamSocksBridge.stop()
+                SlipstreamTunBridge.stop()
                 SlipstreamBridge.stopClient()
                 DnsttBridge.stopClient()
                 VaydnsBridge.stopClient()
@@ -1276,8 +1279,13 @@ class VpnRepositoryImpl @Inject constructor(
 
         when (currentTunnelType) {
             TunnelType.SLIPSTREAM -> {
-                sent = SlipstreamSocksBridge.getTunnelTxBytes()
-                received = SlipstreamSocksBridge.getTunnelRxBytes()
+                if (SlipstreamTunBridge.isRunning()) {
+                    sent = SlipstreamTunBridge.getTunnelTxBytes()
+                    received = SlipstreamTunBridge.getTunnelRxBytes()
+                } else {
+                    sent = SlipstreamSocksBridge.getTunnelTxBytes()
+                    received = SlipstreamSocksBridge.getTunnelRxBytes()
+                }
             }
             TunnelType.DNSTT, TunnelType.NOIZDNS, TunnelType.VAYDNS -> {
                 // VAYDNS in proxy-only mode relays through DnsttSocksBridge on the

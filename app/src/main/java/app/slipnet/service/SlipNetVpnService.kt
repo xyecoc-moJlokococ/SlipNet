@@ -37,8 +37,11 @@ import app.slipnet.tunnel.HttpProxyServer
 import app.slipnet.tunnel.NaiveBridge
 import app.slipnet.tunnel.NaiveSocksBridge
 import app.slipnet.tunnel.RateLimiter
+import app.slipnet.tunnel.KotlinTunnelConfig
+import app.slipnet.tunnel.ResolverConfig
 import app.slipnet.tunnel.SlipstreamBridge
 import app.slipnet.tunnel.SlipstreamSocksBridge
+import app.slipnet.tunnel.SlipstreamTunBridge
 import app.slipnet.tunnel.Socks5ProxyBridge
 import app.slipnet.tunnel.VlessBridge
 import app.slipnet.tunnel.SnowflakeBridge
@@ -333,6 +336,7 @@ class SlipNetVpnService : VpnService() {
                 try { HevSocks5Tunnel.stop() } catch (_: Exception) {}
                 try { DnsttSocksBridge.stop() } catch (_: Exception) {}
                 try { SshTunnelBridge.stopAll() } catch (_: Exception) {}
+                try { SlipstreamTunBridge.stop() } catch (_: Exception) {}
                 try { SlipstreamSocksBridge.stop() } catch (_: Exception) {}
                 try { NaiveSocksBridge.stop() } catch (_: Exception) {}
                 try { TorSocksBridge.stop() } catch (_: Exception) {}
@@ -1310,7 +1314,8 @@ class SlipNetVpnService : VpnService() {
             TAG,
             "Slipstream dump reason=$reason health=$slipstreamHealthState network=$network caps={$capabilities} dns=$dnsServers " +
                 "iface=${link?.interfaceName ?: "unknown"} routes=${link?.routes?.size ?: -1} " +
-                "native={${SlipstreamBridge.dumpState(reason)}} bridge={${SlipstreamSocksBridge.dumpState(reason)}}"
+                "native={${SlipstreamBridge.dumpState(reason)}} bridge={${SlipstreamSocksBridge.dumpState(reason)}} " +
+                "tun={${SlipstreamTunBridge.dumpState(reason)}}"
         )
     }
 
@@ -1494,6 +1499,63 @@ class SlipNetVpnService : VpnService() {
             0x00, 0x00, 0x01, 0x00, 0x01
         )
 
+    private suspend fun tryStartSlipstreamDirectTun(
+        profile: app.slipnet.domain.model.ServerProfile,
+        dnsServer: String,
+        remoteDns: String,
+        actualSlipstreamPort: Int,
+        globalResolverOverride: List<app.slipnet.domain.model.DnsResolver>?
+    ): Boolean {
+        vpnInterface = establishVpnInterface(dnsServer)
+        if (vpnInterface == null) {
+            Log.e(TAG, "Failed to establish VPN interface for Slipstream direct TUN")
+            return false
+        }
+
+        val resolverConfigs = (globalResolverOverride ?: profile.resolvers)
+            .map { ResolverConfig(it.host, it.port, it.authoritative) }
+            .distinctBy { "${it.host}:${it.port}:${it.authoritative}" }
+
+        val config = KotlinTunnelConfig(
+            domain = profile.domain,
+            resolvers = resolverConfigs,
+            slipstreamPort = actualSlipstreamPort,
+            slipstreamHost = "127.0.0.1",
+            dnsServer = remoteDns,
+            congestionControl = profile.congestionControl.value,
+            keepAliveInterval = profile.keepAliveInterval,
+            gsoEnabled = profile.gsoEnabled,
+            connectionPoolSize = 0,
+            verboseLogging = preferencesDataStore.debugLogging.first(),
+            socksUsername = profile.socksUsername,
+            socksPassword = profile.socksPassword,
+            forwardNonDnsUdpDirect = false
+        )
+
+        val result = SlipstreamTunBridge.start(
+            tunFd = vpnInterface!!,
+            config = config,
+            vpnProtect = { socket -> protect(socket) }
+        )
+
+        if (result.isSuccess) {
+            setSlipstreamHealthState(TunnelHealthState.TUNNEL_READY, "direct TUN ready")
+            Log.i(TAG, "Slipstream direct TUN ready: ${SlipstreamTunBridge.dumpState("direct-start-ok")}")
+            finishConnection()
+            return true
+        }
+
+        Log.w(
+            TAG,
+            "Slipstream direct TUN failed, falling back to bridge: ${result.exceptionOrNull()?.message}; " +
+                SlipstreamTunBridge.dumpState("direct-start-failed")
+        )
+        try { SlipstreamTunBridge.stop() } catch (_: Exception) {}
+        try { vpnInterface?.close() } catch (_: Exception) {}
+        vpnInterface = null
+        return false
+    }
+
     private fun readFully(input: java.io.InputStream, buffer: ByteArray) {
         var offset = 0
         while (offset < buffer.size) {
@@ -1506,10 +1568,12 @@ class SlipNetVpnService : VpnService() {
     /**
      * Connect using Slipstream tunnel type.
      * Order: Set VpnService ref -> Start proxy -> Wait for ready -> Wait for QUIC
-     *        -> VPN interface (with addDisallowedApplication) -> Start bridge -> tun2socks on bridge port
+     *        -> VPN interface -> direct TUN manager.
+     *        If direct TUN cannot start, fall back to SlipstreamSocksBridge + tun2socks.
      *
      * Slipstream's SOCKS5 proxy only supports CONNECT (no auth, no FWD_UDP).
-     * SlipstreamSocksBridge sits between hev-socks5-tunnel and Slipstream:
+     * The direct TUN manager handles TCP flows itself and drops non-DNS UDP so
+     * apps fall back to TCP. The old bridge path remains as fallback:
      * - CONNECT: chains to Slipstream's SOCKS5 proxy
      * - FWD_UDP: forwards DNS/UDP directly via DatagramSocket
      *
@@ -1565,6 +1629,20 @@ class SlipNetVpnService : VpnService() {
             return
         }
         setSlipstreamHealthState(TunnelHealthState.QUIC_READY, "QUIC handshake complete")
+
+        if (!isProxyOnly) {
+            val directTunReady = tryStartSlipstreamDirectTun(
+                profile = profile,
+                dnsServer = dnsServer,
+                remoteDns = remoteDns,
+                actualSlipstreamPort = actualSlipstreamPort,
+                globalResolverOverride = globalResolverOverride
+            )
+            if (directTunReady) {
+                return
+            }
+            Log.w(TAG, "Slipstream direct TUN unavailable; continuing with SlipstreamSocksBridge fallback")
+        }
 
         // Step 3: Start SlipstreamSocksBridge on proxyPort (user-facing, with auth for Dante)
         // DNS target resolved at the REMOTE server (through Dante),
@@ -3935,7 +4013,11 @@ class SlipNetVpnService : VpnService() {
 
                 // Check if both native clients are still running and healthy
                 val proxyHealthy = isCurrentProxyHealthy()
-                val tunnelRunning = if (isProxyOnly) true else HevSocks5Tunnel.isRunning()
+                val tunnelRunning = when {
+                    isProxyOnly -> true
+                    currentTunnelType == TunnelType.SLIPSTREAM && SlipstreamTunBridge.isRunning() -> SlipstreamTunBridge.isClientHealthy()
+                    else -> HevSocks5Tunnel.isRunning()
+                }
 
                 if (!proxyHealthy || !tunnelRunning) {
                     Log.e(TAG, "Health check failed: proxy=$proxyHealthy (type=$currentTunnelType), tunnel=$tunnelRunning")
@@ -3971,7 +4053,8 @@ class SlipNetVpnService : VpnService() {
                 // Slipstream CONNECT circuit: short cooldowns are normal, but if the
                 // circuit opens and no later CONNECT succeeds, new TCP flows are
                 // effectively rejected until the transport is restarted.
-                if (currentTunnelType == TunnelType.SLIPSTREAM || currentTunnelType == TunnelType.SLIPSTREAM_SSH) {
+                if ((currentTunnelType == TunnelType.SLIPSTREAM && !SlipstreamTunBridge.isRunning()) ||
+                    currentTunnelType == TunnelType.SLIPSTREAM_SSH) {
                     if (SlipstreamSocksBridge.shouldRecoverConnectCircuit()) {
                         Log.e(TAG, "Slipstream CONNECT circuit stuck, triggering reconnect")
                         setSlipstreamHealthState(TunnelHealthState.DEGRADED, "CONNECT circuit stuck")
@@ -4004,7 +4087,7 @@ class SlipNetVpnService : VpnService() {
                 // For tunnels with DNS worker pools: warn when all workers are dead.
                 val dnsPoolDead = when (currentTunnelType) {
                     TunnelType.DNSTT, TunnelType.NOIZDNS, TunnelType.VAYDNS -> DnsttSocksBridge.isDnsPoolDead()
-                    TunnelType.SLIPSTREAM -> SlipstreamSocksBridge.isDnsPoolDead()
+                    TunnelType.SLIPSTREAM -> if (SlipstreamTunBridge.isRunning()) false else SlipstreamSocksBridge.isDnsPoolDead()
                     TunnelType.NAIVE -> NaiveSocksBridge.isDnsPoolDead()
                     TunnelType.SSH, TunnelType.DNSTT_SSH, TunnelType.NOIZDNS_SSH,
                     TunnelType.VAYDNS_SSH, TunnelType.SLIPSTREAM_SSH, TunnelType.NAIVE_SSH -> SshTunnelBridge.isDnsPoolDead()
@@ -4047,10 +4130,19 @@ class SlipNetVpnService : VpnService() {
                 // DoH: only DNS is routed (/32), so TX-without-RX is normal during
                 // idle periods — skip stall detection to avoid false positives on TV/idle devices.
                 if (!isProxyOnly && currentTunnelType != TunnelType.DOH && healthCheckCount % stallCheckInterval == 0) {
-                    val stats = HevSocks5Tunnel.getStats()
-                    if (stats != null) {
-                        val txIncreased = stats.txBytes > lastTxBytes
-                        val rxIncreased = stats.rxBytes > lastRxBytes
+                    val txBytes = if (currentTunnelType == TunnelType.SLIPSTREAM && SlipstreamTunBridge.isRunning()) {
+                        SlipstreamTunBridge.getTunnelTxBytes()
+                    } else {
+                        HevSocks5Tunnel.getStats()?.txBytes
+                    }
+                    val rxBytes = if (currentTunnelType == TunnelType.SLIPSTREAM && SlipstreamTunBridge.isRunning()) {
+                        SlipstreamTunBridge.getTunnelRxBytes()
+                    } else {
+                        HevSocks5Tunnel.getStats()?.rxBytes
+                    }
+                    if (txBytes != null && rxBytes != null) {
+                        val txIncreased = txBytes > lastTxBytes
+                        val rxIncreased = rxBytes > lastRxBytes
 
                         if (txIncreased && !rxIncreased) {
                             tunnelStallChecks++
@@ -4074,8 +4166,8 @@ class SlipNetVpnService : VpnService() {
                             tunnelStallChecks = 0
                         }
 
-                        lastTxBytes = stats.txBytes
-                        lastRxBytes = stats.rxBytes
+                        lastTxBytes = txBytes
+                        lastRxBytes = rxBytes
                     }
                 }
 
@@ -4083,7 +4175,7 @@ class SlipNetVpnService : VpnService() {
                 // This happens when the transport dies (e.g. QUIC) but localhost TCP
                 // sockets stay open, causing handshake reads to hang indefinitely.
                 val capacityExhausted = when (currentTunnelType) {
-                    TunnelType.SLIPSTREAM -> SlipstreamSocksBridge.isCapacityExhausted()
+                    TunnelType.SLIPSTREAM -> if (SlipstreamTunBridge.isRunning()) false else SlipstreamSocksBridge.isCapacityExhausted()
                     TunnelType.DNSTT, TunnelType.NOIZDNS, TunnelType.VAYDNS -> DnsttSocksBridge.isCapacityExhausted()
                     else -> false
                 }
@@ -4690,26 +4782,30 @@ class SlipNetVpnService : VpnService() {
                     }
                     setSlipstreamHealthState(TunnelHealthState.QUIC_READY, "reconnect QUIC ready")
 
-                    // Restart bridge on proxyPort (with auth for Dante)
-                    SlipstreamSocksBridge.dnsWorkerPoolSize = preferencesDataStore.dnsWorkerMode.first().poolSize
-                    val bridgeResult = vpnRepository.startSlipstreamSocksBridge(
-                        slipstreamPort = actualSlipstreamPort,
-                        slipstreamHost = "127.0.0.1",
-                        bridgePort = proxyPort,
-                        bridgeHost = proxyHost,
-                        socksUsername = profile.socksUsername,
-                        socksPassword = profile.socksPassword
-                    )
-                    if (bridgeResult.isFailure) {
-                        Log.e(TAG, "Failed to restart bridge after network change")
-                        handleTunnelFailure("failed to reconnect after network change")
-                        return@launch
-                    }
+                    if (SlipstreamTunBridge.isRunning()) {
+                        Log.i(TAG, "Slipstream direct TUN kept across network reconnect: ${SlipstreamTunBridge.dumpState("network-reconnect")}")
+                    } else {
+                        // Restart bridge on proxyPort (with auth for Dante)
+                        SlipstreamSocksBridge.dnsWorkerPoolSize = preferencesDataStore.dnsWorkerMode.first().poolSize
+                        val bridgeResult = vpnRepository.startSlipstreamSocksBridge(
+                            slipstreamPort = actualSlipstreamPort,
+                            slipstreamHost = "127.0.0.1",
+                            bridgePort = proxyPort,
+                            bridgeHost = proxyHost,
+                            socksUsername = profile.socksUsername,
+                            socksPassword = profile.socksPassword
+                        )
+                        if (bridgeResult.isFailure) {
+                            Log.e(TAG, "Failed to restart bridge after network change")
+                            handleTunnelFailure("failed to reconnect after network change")
+                            return@launch
+                        }
 
-                    if (!waitForProxyReady(proxyPort, maxAttempts = 20, delayMs = 50)) {
-                        Log.e(TAG, "Bridge failed to restart on port $proxyPort")
-                        handleTunnelFailure("failed to reconnect after network change")
-                        return@launch
+                        if (!waitForProxyReady(proxyPort, maxAttempts = 20, delayMs = 50)) {
+                            Log.e(TAG, "Bridge failed to restart on port $proxyPort")
+                            handleTunnelFailure("failed to reconnect after network change")
+                            return@launch
+                        }
                     }
                 } else if (currentTunnelType == TunnelType.DNSTT || currentTunnelType == TunnelType.NOIZDNS) {
                     // DNSTT / NoizDNS: restart tunnel on internal port + bridge on proxyPort
@@ -5073,6 +5169,7 @@ class SlipNetVpnService : VpnService() {
             TunnelType.SLIPSTREAM -> {
                 Log.d(TAG, "Stopping Slipstream proxy and bridge")
                 dumpSlipstreamState("before-stopCurrentProxy")
+                SlipstreamTunBridge.stop()
                 SlipstreamSocksBridge.stop()
                 SlipstreamBridge.stopClient()
                 dumpSlipstreamState("after-stopCurrentProxy")
@@ -5187,7 +5284,8 @@ class SlipNetVpnService : VpnService() {
         }
 
         return when (currentTunnelType) {
-            TunnelType.SLIPSTREAM -> SlipstreamBridge.isClientHealthy() && SlipstreamSocksBridge.isClientHealthy()
+            TunnelType.SLIPSTREAM -> SlipstreamBridge.isClientHealthy() &&
+                (if (SlipstreamTunBridge.isRunning()) SlipstreamTunBridge.isClientHealthy() else SlipstreamSocksBridge.isClientHealthy())
             TunnelType.SLIPSTREAM_SSH -> SlipstreamBridge.isClientHealthy() && SshTunnelBridge.isClientHealthy()
             TunnelType.DNSTT -> DnsttBridge.isClientHealthy() && DnsttSocksBridge.isClientHealthy()
             TunnelType.NOIZDNS -> DnsttBridge.isClientHealthy() && DnsttSocksBridge.isClientHealthy()
@@ -5543,6 +5641,7 @@ class SlipNetVpnService : VpnService() {
         stateObserverJob = null
 
         // Reset accumulated traffic stats so next connection starts fresh
+        SlipstreamTunBridge.resetTrafficStats()
         SlipstreamSocksBridge.resetTrafficStats()
         DnsttSocksBridge.resetTrafficStats()
         SshTunnelBridge.resetTrafficStats()
@@ -5576,7 +5675,11 @@ class SlipNetVpnService : VpnService() {
         // Try seamless proxy restart first if tun2socks is still alive.
         // Skip if: tun2socks is dead, already in kill-switch/auto-reconnect,
         // or we've exhausted seamless attempts (prevents infinite loop).
-        val tunnelAlive = if (isProxyOnly) true else HevSocks5Tunnel.isRunning()
+        val tunnelAlive = when {
+            isProxyOnly -> true
+            currentTunnelType == TunnelType.SLIPSTREAM && SlipstreamTunBridge.isRunning() -> SlipstreamTunBridge.isClientHealthy()
+            else -> HevSocks5Tunnel.isRunning()
+        }
         val isDnstt = currentTunnelType in listOf(
             TunnelType.DNSTT, TunnelType.NOIZDNS,
             TunnelType.DNSTT_SSH, TunnelType.NOIZDNS_SSH,

@@ -482,6 +482,99 @@ object SlipstreamBridge {
         }
     }
 
+    @Synchronized
+    fun startTunClient(
+        tunFd: Int,
+        domain: String,
+        resolvers: List<ResolverConfig>,
+        congestionControl: String = "bbr",
+        keepAliveInterval: Int = 5000,
+        gsoEnabled: Boolean = false,
+        debugPoll: Boolean = false,
+        debugStreams: Boolean = false,
+        idlePollIntervalMs: Int = 10000,
+        idleTimeoutMs: Int = 120000,
+        resolverTransport: String = "udp",
+        tunDnsServer: String = "8.8.8.8",
+        pacingGainProbe: Double = DEFAULT_PACING_GAIN_PROBE,
+        dnsTcpPacketLoopBurst: Int = DEFAULT_DNS_TCP_PACKET_LOOP_BURST,
+        owner: String = OWNER_VPN
+    ): Result<Unit> {
+        if (!isLibraryLoaded) {
+            return Result.failure(IllegalStateException("Native library not loaded"))
+        }
+
+        if (isNativeRunning()) {
+            val activeOwner = currentOwner ?: OWNER_VPN
+            val canReplace = activeOwner == owner || (owner == OWNER_VPN && activeOwner == OWNER_PROBE)
+            if (!canReplace) {
+                val message = "Slipstream client already running for $activeOwner; refusing TUN $owner start"
+                Log.w(TAG, message)
+                return Result.failure(IllegalStateException(message))
+            }
+            Log.w(TAG, "Slipstream client already running for $activeOwner, stopping before TUN $owner start...")
+            stopClientInternal()
+        } else {
+            currentOwner = null
+        }
+
+        return try {
+            val nativeResolverTransport =
+                if (resolverTransport.equals("tcp", ignoreCase = true)) "tcp" else "udp"
+            val nativePacingGainProbe =
+                pacingGainProbe.takeIf { !it.isNaN() && !it.isInfinite() }?.coerceIn(1.0, 4.0)
+                    ?: DEFAULT_PACING_GAIN_PROBE
+            val nativeDnsTcpPacketLoopBurst = dnsTcpPacketLoopBurst.coerceIn(1, 512)
+            Log.i(
+                TAG,
+                "Starting slipstream native TUN, fd=$tunFd, domain=$domain, resolverTransport=$nativeResolverTransport, pacingGainProbe=$nativePacingGainProbe, dnsTcpPacketLoopBurst=$nativeDnsTcpPacketLoopBurst"
+            )
+            currentPort = 0
+
+            val result = nativeStartSlipstreamTun(
+                domain = domain,
+                resolverHosts = resolvers.map { it.host }.toTypedArray(),
+                resolverPorts = resolvers.map { it.port }.toIntArray(),
+                resolverAuthoritative = resolvers.map { it.authoritative }.toBooleanArray(),
+                tunFd = tunFd,
+                congestionControl = congestionControl,
+                keepAliveInterval = keepAliveInterval,
+                gsoEnabled = gsoEnabled,
+                debugPoll = debugPoll,
+                debugStreams = debugStreams,
+                idlePollInterval = idlePollIntervalMs,
+                idleTimeoutMs = idleTimeoutMs,
+                resolverTransport = nativeResolverTransport,
+                tunDnsServer = tunDnsServer,
+                pacingGainProbe = nativePacingGainProbe,
+                dnsTcpPacketLoopBurst = nativeDnsTcpPacketLoopBurst
+            )
+
+            when (result) {
+                0 -> {
+                    currentOwner = owner
+                    Log.i(TAG, "Slipstream native TUN started successfully")
+                    Result.success(Unit)
+                }
+                -1 -> startFailure(RuntimeException("Invalid domain"))
+                -2 -> startFailure(RuntimeException("Invalid TUN/resolver configuration"))
+                -10 -> {
+                    val nativeError = try { nativeGetLastError()?.takeIf { it.isNotEmpty() } } catch (_: Exception) { null }
+                    startFailure(RuntimeException(nativeError ?: "Failed to spawn native TUN client thread"))
+                }
+                -11 -> {
+                    val nativeError = try { nativeGetLastError()?.takeIf { it.isNotEmpty() } } catch (_: Exception) { null }
+                    startFailure(RuntimeException("Failed to start native TUN client: ${nativeError ?: "unknown startup error"}"))
+                }
+                else -> startFailure(RuntimeException("Failed to start native TUN client: error $result"))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception starting slipstream native TUN", e)
+            if (!isNativeRunning()) currentOwner = null
+            Result.failure(e)
+        }
+    }
+
     // Native methods - matches slipstream-client CLI parameters
     private external fun nativeStartSlipstreamClient(
         domain: String,
@@ -498,6 +591,25 @@ object SlipstreamBridge {
         idlePollInterval: Int,
         idleTimeoutMs: Int,
         resolverTransport: String,
+        pacingGainProbe: Double,
+        dnsTcpPacketLoopBurst: Int
+    ): Int
+
+    private external fun nativeStartSlipstreamTun(
+        domain: String,
+        resolverHosts: Array<String>,
+        resolverPorts: IntArray,
+        resolverAuthoritative: BooleanArray,
+        tunFd: Int,
+        congestionControl: String,
+        keepAliveInterval: Int,
+        gsoEnabled: Boolean,
+        debugPoll: Boolean,
+        debugStreams: Boolean,
+        idlePollInterval: Int,
+        idleTimeoutMs: Int,
+        resolverTransport: String,
+        tunDnsServer: String,
         pacingGainProbe: Double,
         dnsTcpPacketLoopBurst: Int
     ): Int

@@ -26,6 +26,7 @@ import app.slipnet.tunnel.GeoBypassCountry
 import app.slipnet.tunnel.GeoBypassData
 import app.slipnet.data.repository.VpnRepositoryImpl
 import app.slipnet.domain.model.ConnectionState
+import app.slipnet.domain.model.DnsTransport
 import app.slipnet.domain.model.TunnelType
 import app.slipnet.domain.model.isAvailable
 import app.slipnet.tunnel.DnsttBridge
@@ -1559,6 +1560,74 @@ class SlipNetVpnService : VpnService() {
         return false
     }
 
+    private suspend fun tryStartSlipstreamNativeTun(
+        profile: app.slipnet.domain.model.ServerProfile,
+        dnsServer: String,
+        remoteDns: String,
+        globalResolverOverride: List<app.slipnet.domain.model.DnsResolver>?
+    ): Boolean {
+        vpnInterface = establishVpnInterface(dnsServer)
+        if (vpnInterface == null) {
+            Log.e(TAG, "Failed to establish VPN interface for Slipstream native Rust TUN")
+            return false
+        }
+
+        val resolverConfigs = (globalResolverOverride ?: profile.resolvers)
+            .map { ResolverConfig(it.host, it.port, it.authoritative) }
+            .distinctBy { "${it.host}:${it.port}:${it.authoritative}" }
+
+        val config = KotlinTunnelConfig(
+            domain = profile.domain,
+            resolvers = resolverConfigs,
+            slipstreamPort = 0,
+            slipstreamHost = "native-tun",
+            dnsServer = dnsServer,
+            congestionControl = profile.congestionControl.value,
+            keepAliveInterval = profile.keepAliveInterval,
+            gsoEnabled = profile.gsoEnabled,
+            connectionPoolSize = 0,
+            verboseLogging = preferencesDataStore.debugLogging.first(),
+            socksUsername = profile.socksUsername,
+            socksPassword = profile.socksPassword,
+            forwardNonDnsUdpDirect = false,
+            dnsViaSocks = false
+        )
+
+        val result = SlipstreamTunBridge.startNative(
+            tunFd = vpnInterface!!,
+            config = config,
+            resolverTransport = if (profile.dnsTransport == DnsTransport.TCP) "tcp" else "udp",
+            remoteDns = remoteDns,
+            pacingGainProbe = preferencesDataStore.slipstreamPacingGainProbe.first(),
+            dnsTcpPacketLoopBurst = preferencesDataStore.slipstreamDnsTcpPacketLoopBurst.first(),
+            idleTimeoutMs = preferencesDataStore.slipstreamRelayIdleTimeoutMs.first()
+        )
+
+        if (result.isFailure) {
+            Log.w(TAG, "Slipstream native Rust TUN failed: ${result.exceptionOrNull()?.message}")
+            try { SlipstreamTunBridge.stop() } catch (_: Exception) {}
+            try { vpnInterface?.close() } catch (_: Exception) {}
+            vpnInterface = null
+            return false
+        }
+
+        val quicReady = waitForQuicReady(maxAttempts = 50, delayMs = 100)
+        if (!quicReady) {
+            Log.w(TAG, "Slipstream native Rust TUN QUIC timeout: ${SlipstreamTunBridge.dumpState("native-quic-timeout")}")
+            try { SlipstreamTunBridge.stop() } catch (_: Exception) {}
+            try { vpnInterface?.close() } catch (_: Exception) {}
+            vpnInterface = null
+            return false
+        }
+
+        setSlipstreamHealthState(TunnelHealthState.TUNNEL_READY, "native Rust TUN ready")
+        vpnRepository.setCurrentTunnelType(TunnelType.SLIPSTREAM)
+        vpnRepository.setProxyConnected(profile)
+        Log.i(TAG, "Slipstream native Rust TUN ready: ${SlipstreamTunBridge.dumpState("native-start-ok")}")
+        finishConnection()
+        return true
+    }
+
     private fun readFully(input: java.io.InputStream, buffer: ByteArray) {
         var offset = 0
         while (offset < buffer.size) {
@@ -1591,6 +1660,19 @@ class SlipNetVpnService : VpnService() {
         // Step 1: Set VpnService reference for socket protection via JNI
         SlipstreamBridge.proxyOnlyMode = isProxyOnly
         SlipstreamBridge.setVpnService(this@SlipNetVpnService)
+
+        if (!isProxyOnly) {
+            val nativeTunReady = tryStartSlipstreamNativeTun(
+                profile = profile,
+                dnsServer = dnsServer,
+                remoteDns = remoteDns,
+                globalResolverOverride = globalResolverOverride
+            )
+            if (nativeTunReady) {
+                return
+            }
+            Log.w(TAG, "Slipstream native Rust TUN unavailable; falling back to listener/bridge path")
+        }
 
         // Step 2: Start Slipstream proxy on internal port (127.0.0.1 only)
         val proxyResult = vpnRepository.startSlipstreamProxy(profile, portOverride = slipstreamPort, hostOverride = "127.0.0.1", resolverOverride = globalResolverOverride)

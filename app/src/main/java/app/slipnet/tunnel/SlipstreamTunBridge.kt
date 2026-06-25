@@ -108,6 +108,9 @@ object SlipstreamTunBridge {
     fun isRunning(): Boolean =
         (nativeTunRunning && SlipstreamBridge.isNativeRunning()) || (running.get() && manager != null)
 
+    fun isNativeTunRunning(): Boolean =
+        nativeTunRunning && SlipstreamBridge.isNativeRunning()
+
     fun isClientHealthy(): Boolean =
         isRunning() && SlipstreamBridge.isNativeRunning() && SlipstreamBridge.isQuicReady()
 

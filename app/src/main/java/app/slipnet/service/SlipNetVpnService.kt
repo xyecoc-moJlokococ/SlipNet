@@ -1655,13 +1655,14 @@ class SlipNetVpnService : VpnService() {
         val proxyPort = preferencesDataStore.proxyListenPort.first()
         val proxyHost = preferencesDataStore.proxyListenAddress.first()
         val slipstreamPort = proxyPort + 1
+        val nativeTunEnabled = false
         setSlipstreamHealthState(TunnelHealthState.STARTING, "connectSlipstream")
 
         // Step 1: Set VpnService reference for socket protection via JNI
         SlipstreamBridge.proxyOnlyMode = isProxyOnly
         SlipstreamBridge.setVpnService(this@SlipNetVpnService)
 
-        if (!isProxyOnly) {
+        if (!isProxyOnly && nativeTunEnabled) {
             val nativeTunReady = tryStartSlipstreamNativeTun(
                 profile = profile,
                 dnsServer = dnsServer,
@@ -1672,6 +1673,8 @@ class SlipNetVpnService : VpnService() {
                 return
             }
             Log.w(TAG, "Slipstream native Rust TUN unavailable; falling back to listener/bridge path")
+        } else if (!isProxyOnly) {
+            Log.i(TAG, "Slipstream native Rust TUN disabled; using listener/bridge fallback path")
         }
 
         // Step 2: Start Slipstream proxy on internal port (127.0.0.1 only)
@@ -5369,8 +5372,12 @@ class SlipNetVpnService : VpnService() {
         }
 
         return when (currentTunnelType) {
-            TunnelType.SLIPSTREAM -> SlipstreamBridge.isClientHealthy() &&
-                (if (SlipstreamTunBridge.isRunning()) SlipstreamTunBridge.isClientHealthy() else SlipstreamSocksBridge.isClientHealthy())
+            TunnelType.SLIPSTREAM -> if (SlipstreamTunBridge.isNativeTunRunning()) {
+                SlipstreamTunBridge.isClientHealthy()
+            } else {
+                SlipstreamBridge.isClientHealthy() &&
+                    (if (SlipstreamTunBridge.isRunning()) SlipstreamTunBridge.isClientHealthy() else SlipstreamSocksBridge.isClientHealthy())
+            }
             TunnelType.SLIPSTREAM_SSH -> SlipstreamBridge.isClientHealthy() && SshTunnelBridge.isClientHealthy()
             TunnelType.DNSTT -> DnsttBridge.isClientHealthy() && DnsttSocksBridge.isClientHealthy()
             TunnelType.NOIZDNS -> DnsttBridge.isClientHealthy() && DnsttSocksBridge.isClientHealthy()

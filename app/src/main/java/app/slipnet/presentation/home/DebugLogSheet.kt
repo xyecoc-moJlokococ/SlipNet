@@ -1,5 +1,7 @@
 package app.slipnet.presentation.home
 
+import android.content.Context
+import android.content.Intent
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -16,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -31,13 +34,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.content.FileProvider
 import app.slipnet.util.AppLog
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun DebugLogSheet(onDismiss: () -> Unit) {
@@ -58,6 +67,7 @@ fun DebugLogSheet(onDismiss: () -> Unit) {
     val lines by AppLog.lines.collectAsState()
     val listState = rememberLazyListState()
     val clipboardManager = LocalClipboardManager.current
+    val context = LocalContext.current
 
     // Auto-scroll to bottom only when already near the bottom
     LaunchedEffect(lines.size) {
@@ -104,6 +114,13 @@ fun DebugLogSheet(onDismiss: () -> Unit) {
                         Icon(
                             Icons.Default.ContentCopy,
                             contentDescription = "Copy logs",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    IconButton(onClick = { shareLogs(context) }) {
+                        Icon(
+                            Icons.Default.Share,
+                            contentDescription = "Share logs",
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
@@ -159,4 +176,28 @@ private fun levelColor(level: Char): Color {
         'V' -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
         else -> MaterialTheme.colorScheme.onSurface
     }
+}
+
+private fun shareLogs(context: Context) {
+    val sharedDir = File(context.cacheDir, "shared")
+    sharedDir.mkdirs()
+    val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+    val file = File(sharedDir, "slipnet_logs_$timestamp.txt")
+    val content = buildString {
+        appendLine("SlipNet logs")
+        appendLine("saved_at=${Date()}")
+        appendLine("package=${context.packageName}")
+        appendLine()
+        append(AppLog.snapshotText())
+    }
+    file.writeText(content)
+
+    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+    val intent = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_STREAM, uri)
+        putExtra(Intent.EXTRA_SUBJECT, "SlipNet logs")
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    context.startActivity(Intent.createChooser(intent, "Share SlipNet logs"))
 }

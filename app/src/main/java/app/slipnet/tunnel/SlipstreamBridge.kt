@@ -96,6 +96,17 @@ object SlipstreamBridge {
         return true
     }
 
+    @JvmStatic
+    fun nativeLog(priority: Int, tag: String, message: String) {
+        when (priority) {
+            6 -> Log.e(tag, message)
+            5 -> Log.w(tag, message)
+            4 -> Log.i(tag, message)
+            3 -> Log.d(tag, message)
+            else -> Log.v(tag, message)
+        }
+    }
+
     /**
      * Start the slipstream client (DNS tunnel).
      * The client will listen on the specified host:port for SOCKS5 connections.

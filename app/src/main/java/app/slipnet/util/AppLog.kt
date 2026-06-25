@@ -23,7 +23,7 @@ data class LogEntry(val id: Long, val raw: String, val level: Char)
  * — no other code changes needed.
  */
 object AppLog {
-    private const val MAX_LINES = 500
+    private const val MAX_LINES = 20_000
     private val nextId = AtomicLong(0)
     private val buffer = ArrayDeque<LogEntry>()
 
@@ -102,6 +102,7 @@ object AppLog {
         "NaiveSocksBridge",
         "TorSocksBridge",
         "SlipstreamBridge",
+        "SlipstreamNative",
         "DnsttBridge",
         "NaiveBridge",
         "VpnRepositoryImpl",
@@ -173,6 +174,12 @@ object AppLog {
         synchronized(buffer) {
             buffer.clear()
             _lines.value = emptyList()
+        }
+    }
+
+    fun snapshotText(): String {
+        return synchronized(buffer) {
+            buffer.joinToString("\n") { it.raw }
         }
     }
 }

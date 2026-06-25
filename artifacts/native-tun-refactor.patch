@@ -1,0 +1,449 @@
+diff --git a/crates/slipstream-client/src/lib.rs b/crates/slipstream-client/src/lib.rs
+index 80fc37d..b2ec9f3 100644
+--- a/crates/slipstream-client/src/lib.rs
++++ b/crates/slipstream-client/src/lib.rs
+@@ -5,6 +5,7 @@ mod pinning;
+ mod platform;
+ mod runtime;
+ mod streams;
++mod tun;
+ 
+ use jni::objects::{JBooleanArray, JIntArray, JObject, JObjectArray, JString};
+ use jni::sys::{jdouble, jint, jstring, JNI_VERSION_1_6};
+@@ -192,6 +193,9 @@ pub extern "system" fn Java_app_slipnet_tunnel_SlipstreamBridge_nativeStartSlips
+             let config = ClientConfig {
+                 tcp_listen_host: &listen_host,
+                 tcp_listen_port: listen_port as u16,
++                tcp_listener_enabled: true,
++                tun_fd: None,
++                tun_dns_server: None,
+                 resolvers: &resolvers,
+                 congestion_control: congestion_control.as_deref(),
+                 gso: gso_enabled,
+@@ -251,6 +255,180 @@ pub extern "system" fn Java_app_slipnet_tunnel_SlipstreamBridge_nativeStartSlips
+     }
+ }
+ 
++#[allow(clippy::too_many_arguments)]
++#[no_mangle]
++pub extern "system" fn Java_app_slipnet_tunnel_SlipstreamBridge_nativeStartSlipstreamTun(
++    mut env: JNIEnv<'_>,
++    _this: JObject<'_>,
++    domain: JString<'_>,
++    resolver_hosts: JObjectArray<'_>,
++    resolver_ports: JIntArray<'_>,
++    resolver_authoritative: JBooleanArray<'_>,
++    tun_fd: jint,
++    congestion_control: JString<'_>,
++    keep_alive_interval: jint,
++    gso_enabled: bool,
++    debug_poll: bool,
++    debug_streams: bool,
++    _idle_poll_interval: jint,
++    _idle_timeout_ms: jint,
++    resolver_transport: JString<'_>,
++    tun_dns_server: JString<'_>,
++    pacing_gain_probe: jdouble,
++    dns_tcp_packet_loop_burst: jint,
++) -> jint {
++    clear_last_error();
++    if RUNNING.load(Ordering::SeqCst) {
++        set_last_error("Slipstream client is already running");
++        return -10;
++    }
++    let _ = stop_running_client();
++
++    let domain = match java_string(&mut env, &domain)
++        .and_then(|value| normalize_domain(&value).map_err(|err| err.to_string()))
++    {
++        Ok(domain) => domain,
++        Err(err) => {
++            set_last_error(err);
++            return -1;
++        }
++    };
++    let congestion_control = match java_string(&mut env, &congestion_control) {
++        Ok(value) if value.trim().is_empty() => None,
++        Ok(value) => Some(value),
++        Err(err) => {
++            set_last_error(err);
++            return -2;
++        }
++    };
++    let resolver_transport = match java_string(&mut env, &resolver_transport) {
++        Ok(value) => parse_resolver_transport(&value),
++        Err(err) => {
++            set_last_error(err);
++            return -2;
++        }
++    };
++    let tun_dns_server = match java_string(&mut env, &tun_dns_server) {
++        Ok(value) if value.trim().is_empty() => "8.8.8.8".to_string(),
++        Ok(value) => value,
++        Err(err) => {
++            set_last_error(err);
++            return -2;
++        }
++    };
++    let mut resolvers = match read_resolvers(
++        &mut env,
++        resolver_hosts,
++        resolver_ports,
++        resolver_authoritative,
++    ) {
++        Ok(resolvers) => resolvers,
++        Err(err) => {
++            set_last_error(err);
++            return -2;
++        }
++    };
++    if resolver_transport == ResolverTransport::Tcp && resolvers.len() > 1 {
++        resolvers.truncate(1);
++    }
++    if resolvers.is_empty() || tun_fd < 0 {
++        set_last_error("invalid Slipstream TUN configuration");
++        return -2;
++    }
++    let pacing_gain_probe = sanitize_pacing_gain_probe(pacing_gain_probe);
++    let dns_tcp_packet_loop_burst = if dns_tcp_packet_loop_burst > 0 {
++        sanitize_dns_tcp_packet_loop_burst(dns_tcp_packet_loop_burst as usize)
++    } else {
++        DEFAULT_DNS_TCP_PACKET_LOOP_BURST
++    };
++
++    let (stop_tx, stop_rx) = mpsc::unbounded_channel();
++    let (ready_tx, ready_rx) = std_mpsc::channel();
++    let (started_tx, started_rx) = std_mpsc::channel();
++    let generation = CLIENT_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
++    let thread = match thread::Builder::new()
++        .name("slipstream-client-tun".to_string())
++        .spawn(move || {
++            store_running(generation, true);
++            store_ready(generation, false);
++            let _ = started_tx.send(());
++            let runtime = match Builder::new_current_thread()
++                .enable_io()
++                .enable_time()
++                .build()
++            {
++                Ok(runtime) => runtime,
++                Err(err) => {
++                    set_last_error(format!("failed to build Tokio runtime: {}", err));
++                    store_running(generation, false);
++                    return;
++                }
++            };
++            let config = ClientConfig {
++                tcp_listen_host: "",
++                tcp_listen_port: 0,
++                tcp_listener_enabled: false,
++                tun_fd: Some(tun_fd),
++                tun_dns_server: Some(&tun_dns_server),
++                resolvers: &resolvers,
++                congestion_control: congestion_control.as_deref(),
++                gso: gso_enabled,
++                domain: &domain,
++                cert: None,
++                keep_alive_interval: keep_alive_interval.max(0) as usize,
++                resolver_transport,
++                pacing_gain_probe,
++                dns_tcp_packet_loop_burst,
++                debug_poll,
++                debug_streams,
++            };
++            if let Err(err) = runtime.block_on(runtime::run_client_with_control(
++                &config,
++                Some(stop_rx),
++                Some(ready_tx),
++            )) {
++                set_last_error(err.to_string());
++            }
++            store_ready(generation, false);
++            store_running(generation, false);
++        }) {
++        Ok(thread) => thread,
++        Err(err) => {
++            set_last_error(format!("failed to spawn Slipstream TUN client thread: {}", err));
++            if is_current_generation(generation) {
++                RUNNING.store(false, Ordering::SeqCst);
++                READY.store(false, Ordering::SeqCst);
++            }
++            return -10;
++        }
++    };
++    let _ = started_rx.recv_timeout(Duration::from_secs(1));
++    thread::sleep(Duration::from_millis(150));
++    if !RUNNING.load(Ordering::SeqCst) {
++        let _ = thread.join();
++        return -11;
++    }
++
++    thread::spawn(move || {
++        while let Ok(ready) = ready_rx.recv() {
++            store_ready(generation, ready);
++        }
++        store_ready(generation, false);
++    });
++
++    if let Ok(mut client) = client_slot().lock() {
++        *client = Some(ClientHandle {
++            stop_tx,
++            thread,
++            generation,
++        });
++        0
++    } else {
++        set_last_error("failed to lock Slipstream client state");
++        -10
++    }
++}
++
+ #[no_mangle]
+ pub extern "system" fn Java_app_slipnet_tunnel_SlipstreamBridge_nativeStopSlipstreamClient(
+     _env: JNIEnv<'_>,
+diff --git a/crates/slipstream-client/src/main.rs b/crates/slipstream-client/src/main.rs
+index 1b0f73b..c20ce64 100644
+--- a/crates/slipstream-client/src/main.rs
++++ b/crates/slipstream-client/src/main.rs
+@@ -5,6 +5,7 @@ mod pinning;
+ mod platform;
+ mod runtime;
+ mod streams;
++mod tun;
+ 
+ use clap::{parser::ValueSource, ArgGroup, CommandFactory, FromArgMatches, Parser, ValueEnum};
+ use slipstream_core::{
+@@ -210,6 +211,9 @@ fn main() {
+     let config = ClientConfig {
+         tcp_listen_host: &tcp_listen_host,
+         tcp_listen_port,
++        tcp_listener_enabled: true,
++        tun_fd: None,
++        tun_dns_server: None,
+         resolvers: &resolvers,
+         congestion_control: congestion_control.as_deref(),
+         gso: args.gso,
+diff --git a/crates/slipstream-client/src/runtime.rs b/crates/slipstream-client/src/runtime.rs
+index 472a3ef..b3238cf 100644
+--- a/crates/slipstream-client/src/runtime.rs
++++ b/crates/slipstream-client/src/runtime.rs
+@@ -18,6 +18,7 @@ use crate::streams::{
+     acceptor::ClientAcceptor, client_callback, drain_commands, drain_stream_data, handle_command,
+     ClientState, Command,
+ };
++use crate::tun;
+ use slipstream_dns::{build_qname, encode_query, QueryParams, CLASS_IN, RR_TXT};
+ use slipstream_ffi::{
+     configure_quic_with_custom,
+@@ -163,13 +164,30 @@ pub async fn run_client_with_control(
+     let data_notify = Arc::new(Notify::new());
+     let acceptor = ClientAcceptor::new();
+     let debug_streams = config.debug_streams;
+-    let tcp_host = config.tcp_listen_host;
+-    let tcp_port = config.tcp_listen_port;
+-    let (listener, bound_host) = bind_tcp_listener(tcp_host, tcp_port)
+-        .await
+-        .map_err(map_io)?;
+-    acceptor.spawn(listener, command_tx.clone());
+-    info!("Listening on TCP port {} (host {})", tcp_port, bound_host);
++    if config.tcp_listener_enabled {
++        let tcp_host = config.tcp_listen_host;
++        let tcp_port = config.tcp_listen_port;
++        let (listener, bound_host) = bind_tcp_listener(tcp_host, tcp_port)
++            .await
++            .map_err(map_io)?;
++        acceptor.spawn(listener, command_tx.clone());
++        info!("Listening on TCP port {} (host {})", tcp_port, bound_host);
++    } else {
++        info!("TCP listener disabled; waiting for native TUN streams");
++    }
++    let _tun_engine = match config.tun_fd {
++        Some(tun_fd) => Some(
++            tun::start_tun_engine(
++                tun_fd,
++                config.tun_dns_server.unwrap_or("8.8.8.8"),
++                command_tx.clone(),
++                acceptor.clone(),
++                config.debug_streams,
++            )
++            .map_err(|err| ClientError::new(format!("native TUN start failed: {}", err)))?,
++        ),
++        None => None,
++    };
+ 
+     let alpn = CString::new(SLIPSTREAM_ALPN)
+         .map_err(|_| ClientError::new("ALPN contains an unexpected null byte"))?;
+diff --git a/crates/slipstream-client/src/streams.rs b/crates/slipstream-client/src/streams.rs
+index 85d35c5..8dd1a90 100644
+--- a/crates/slipstream-client/src/streams.rs
++++ b/crates/slipstream-client/src/streams.rs
+@@ -1,6 +1,7 @@
+ pub(crate) mod acceptor;
+ mod callback;
+ mod command_dispatch;
++mod downstream;
+ mod invariants;
+ mod io_tasks;
+ mod state;
+@@ -12,4 +13,5 @@ mod tests;
+ 
+ pub(crate) use callback::client_callback;
+ pub(crate) use command_dispatch::{drain_commands, drain_stream_data, handle_command};
++pub(crate) use downstream::DownstreamStream;
+ pub(crate) use state::{ClientState, Command, PathEvent};
+diff --git a/crates/slipstream-client/src/streams/acceptor.rs b/crates/slipstream-client/src/streams/acceptor.rs
+index aae560c..b3e0e57 100644
+--- a/crates/slipstream-client/src/streams/acceptor.rs
++++ b/crates/slipstream-client/src/streams/acceptor.rs
+@@ -1,4 +1,7 @@
+ use super::Command;
++use super::downstream::DownstreamStream;
++use super::state::CLIENT_WRITE_COALESCE_DEFAULT_BYTES;
++use slipstream_core::tcp::tcp_send_buffer_bytes;
+ use slipstream_ffi::picoquic::{picoquic_cnx_t, slipstream_get_max_streams_bidir_remote};
+ use std::sync::atomic::{AtomicUsize, Ordering};
+ use std::sync::Arc;
+@@ -53,6 +56,10 @@ impl ClientAcceptor {
+     pub(crate) async fn reserve_for_test(&self) -> AcceptorReservation {
+         self.limiter.reserve().await
+     }
++
++    pub(crate) async fn reserve(&self) -> AcceptorReservation {
++        self.limiter.reserve().await
++    }
+ }
+ 
+ pub(super) fn initial_acceptor_limit() -> usize {
+@@ -216,6 +223,11 @@ impl AcceptorGate {
+                     drop(stream);
+                     return true;
+                 };
++                let _ = stream.set_nodelay(true);
++                let write_coalesce_bytes = tcp_send_buffer_bytes(&stream)
++                    .filter(|bytes| *bytes > 0)
++                    .unwrap_or(CLIENT_WRITE_COALESCE_DEFAULT_BYTES);
++                let stream = DownstreamStream::from_tcp_stream(stream, Some(write_coalesce_bytes));
+                 if command_tx
+                     .send(Command::NewStream {
+                         stream,
+diff --git a/crates/slipstream-client/src/streams/command_dispatch.rs b/crates/slipstream-client/src/streams/command_dispatch.rs
+index d907d3f..f3c0568 100644
+--- a/crates/slipstream-client/src/streams/command_dispatch.rs
++++ b/crates/slipstream-client/src/streams/command_dispatch.rs
+@@ -10,7 +10,6 @@ use slipstream_core::flow_control::{
+     conn_reserve_bytes, consume_error_log_message, consume_stream_data, promote_error_log_message,
+     promote_streams, reserve_target_offset, FlowControlState, PromoteEntry,
+ };
+-use slipstream_core::tcp::{stream_read_limit_chunks, tcp_send_buffer_bytes};
+ use slipstream_ffi::picoquic::{
+     picoquic_add_to_stream, picoquic_cnx_t, picoquic_current_time,
+     picoquic_get_next_local_stream_id, picoquic_mark_active_stream, picoquic_stream_data_consumed,
+@@ -82,7 +81,6 @@ pub(crate) fn handle_command(
+                 drop(stream);
+                 return;
+             }
+-            let _ = stream.set_nodelay(true);
+             #[cfg(test)]
+             let forced_failure = test_hooks::take_mark_active_stream_failure();
+             #[cfg(not(test))]
+@@ -128,17 +126,12 @@ pub(crate) fn handle_command(
+                 }
+                 return;
+             }
+-            let read_limit = stream_read_limit_chunks(
+-                &stream,
+-                DEFAULT_TCP_RCVBUF_BYTES,
+-                STREAM_READ_CHUNK_BYTES,
+-            );
++            let (read_half, write_half, write_coalesce_bytes) = stream.split();
++            let read_limit = (DEFAULT_TCP_RCVBUF_BYTES / STREAM_READ_CHUNK_BYTES).max(1);
+             let (data_tx, data_rx) = mpsc::channel(read_limit);
+             let data_notify = state.data_notify.clone();
+-            let send_buffer_bytes = tcp_send_buffer_bytes(&stream)
+-                .filter(|bytes| *bytes > 0)
++            let send_buffer_bytes = write_coalesce_bytes
+                 .unwrap_or(CLIENT_WRITE_COALESCE_DEFAULT_BYTES);
+-            let (read_half, write_half) = stream.into_split();
+             let (write_tx, write_rx) = mpsc::unbounded_channel();
+             let command_tx = state.command_tx.clone();
+             let (read_abort_tx, read_abort_rx) = oneshot::channel();
+diff --git a/crates/slipstream-client/src/streams/io_tasks.rs b/crates/slipstream-client/src/streams/io_tasks.rs
+index 986d9ab..23ca301 100644
+--- a/crates/slipstream-client/src/streams/io_tasks.rs
++++ b/crates/slipstream-client/src/streams/io_tasks.rs
+@@ -1,4 +1,5 @@
+ use super::Command;
++use super::downstream::{DownstreamReadHalf, DownstreamWriteHalf};
+ use std::sync::Arc;
+ use tokio::io::{AsyncReadExt, AsyncWriteExt};
+ use tokio::sync::{mpsc, oneshot, Notify};
+@@ -14,7 +15,7 @@ pub(super) enum StreamWrite {
+ 
+ pub(super) fn spawn_client_reader(
+     stream_id: u64,
+-    mut read_half: tokio::net::tcp::OwnedReadHalf,
++    mut read_half: DownstreamReadHalf,
+     mut read_abort_rx: oneshot::Receiver<()>,
+     generation: usize,
+     command_tx: mpsc::UnboundedSender<Command>,
+@@ -92,7 +93,7 @@ pub(super) fn spawn_client_reader(
+ 
+ pub(super) fn spawn_client_writer(
+     stream_id: u64,
+-    mut write_half: tokio::net::tcp::OwnedWriteHalf,
++    mut write_half: DownstreamWriteHalf,
+     mut write_rx: mpsc::UnboundedReceiver<StreamWrite>,
+     generation: usize,
+     command_tx: mpsc::UnboundedSender<Command>,
+diff --git a/crates/slipstream-client/src/streams/state.rs b/crates/slipstream-client/src/streams/state.rs
+index 96de271..872d9d2 100644
+--- a/crates/slipstream-client/src/streams/state.rs
++++ b/crates/slipstream-client/src/streams/state.rs
+@@ -1,10 +1,10 @@
+ use super::acceptor;
++use super::downstream::DownstreamStream;
+ use super::io_tasks::StreamWrite;
+ use slipstream_core::flow_control::{FlowControlState, HasFlowControlState};
+ use slipstream_ffi::picoquic::picoquic_cnx_t;
+ use std::collections::HashMap;
+ use std::sync::Arc;
+-use tokio::net::TcpStream as TokioTcpStream;
+ use tokio::sync::{mpsc, oneshot, Notify};
+ use tracing::{debug, info};
+ 
+@@ -278,7 +278,7 @@ impl HasFlowControlState for ClientStream {
+ 
+ pub(crate) enum Command {
+     NewStream {
+-        stream: TokioTcpStream,
++        stream: DownstreamStream,
+         reservation: acceptor::AcceptorReservation,
+     },
+     StreamData {
+diff --git a/crates/slipstream-client/src/streams/tests.rs b/crates/slipstream-client/src/streams/tests.rs
+index 87d62ed..21517c7 100644
+--- a/crates/slipstream-client/src/streams/tests.rs
++++ b/crates/slipstream-client/src/streams/tests.rs
+@@ -318,7 +318,7 @@ fn mark_active_stream_failure_removes_stream() {
+             std::ptr::null_mut(),
+             &mut state as *mut _,
+             Command::NewStream {
+-                stream,
++                stream: DownstreamStream::from_tcp_stream(stream, None),
+                 reservation,
+             },
+         );
+diff --git a/crates/slipstream-ffi/src/lib.rs b/crates/slipstream-ffi/src/lib.rs
+index 5fa846a..83e61d1 100644
+--- a/crates/slipstream-ffi/src/lib.rs
++++ b/crates/slipstream-ffi/src/lib.rs
+@@ -31,6 +31,9 @@ pub enum ResolverTransport {
+ pub struct ClientConfig<'a> {
+     pub tcp_listen_host: &'a str,
+     pub tcp_listen_port: u16,
++    pub tcp_listener_enabled: bool,
++    pub tun_fd: Option<i32>,
++    pub tun_dns_server: Option<&'a str>,
+     pub resolvers: &'a [ResolverSpec],
+     pub domain: &'a str,
+     pub cert: Option<&'a str>,

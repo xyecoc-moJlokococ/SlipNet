@@ -4,6 +4,7 @@ import android.os.ParcelFileDescriptor
 import app.slipnet.util.AppLog as Log
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.sync.Semaphore
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
@@ -37,6 +38,9 @@ data class KotlinTunnelConfig(
     // When true, DNS queries are sent as DNS-over-TCP through Slipstream SOCKS.
     // This keeps website DNS working on networks that block direct UDP/53.
     val dnsViaSocks: Boolean = false,
+    // DNS over Slipstream is expensive: every query opens a CONNECT stream.
+    // Keep it bounded so DNS bursts cannot spin up dozens of coroutines/streams.
+    val dnsViaSocksMaxConcurrent: Int = 4,
     // DNS forwarding through SSH (for SSH-only mode)
     // When > 0, DNS queries are sent via TCP to this local port (SSH port-forwarded)
     val dnsForwardPort: Int = 0
@@ -107,6 +111,9 @@ class KotlinTunnelManager(
     private val packetsSent = AtomicLong(0)
     private val packetsReceived = AtomicLong(0)
     private val dnsStreamCounter = AtomicLong(10_000_000L)
+    private val dnsViaSocksSemaphore = Semaphore(config.dnsViaSocksMaxConcurrent.coerceAtLeast(1))
+    private val lastDnsViaSocksDropLogAt = AtomicLong(0)
+    private val lastDnsViaSocksErrorLogAt = AtomicLong(0)
 
     /**
      * Start the tunnel
@@ -209,12 +216,14 @@ class KotlinTunnelManager(
         // TUN reader task - high priority IO dispatcher
         scope.launch(Dispatchers.IO) {
             Log.i(TAG, "TUN reader started")
+            val readBuffer = ByteArray(TunInterface.MAX_PACKET_SIZE)
             while (isRunning.get()) {
                 try {
-                    val packet = tunInterface.readPacket()
-                    if (packet != null && packet.isNotEmpty()) {
-                        bytesSent.addAndGet(packet.size.toLong())
+                    val length = tunInterface.readPacketInto(readBuffer)
+                    if (length > 0) {
+                        bytesSent.addAndGet(length.toLong())
                         packetsSent.incrementAndGet()
+                        val packet = readBuffer.copyOf(length)
                         processOutboundPacket(packet)
                     }
                     // No delay - blocking read handles waiting
@@ -327,7 +336,7 @@ class KotlinTunnelManager(
                     forwardDnsQueryViaTcp(udpPayload, "127.0.0.1", config.dnsForwardPort)
                 } else if (config.dnsViaSocks) {
                     // Route DNS through Slipstream via SOCKS CONNECT + DNS-over-TCP.
-                    forwardDnsQueryViaSocks(udpPayload, config.dnsServer, 53)
+                    forwardDnsQueryViaSocksBounded(udpPayload, config.dnsServer, 53)
                 } else {
                     // Direct UDP to DNS server (outside VPN)
                     forwardDnsQuery(udpPayload, config.dnsServer, 53)
@@ -351,15 +360,44 @@ class KotlinTunnelManager(
         }
     }
 
+    private suspend fun forwardDnsQueryViaSocksBounded(query: ByteArray, host: String, port: Int): ByteArray? {
+        if (!dnsViaSocksSemaphore.tryAcquire()) {
+            logDnsViaSocksDrop("DNS-over-Slipstream busy; dropping burst query")
+            return null
+        }
+
+        return try {
+            forwardDnsQueryViaSocks(query, host, port)
+        } finally {
+            dnsViaSocksSemaphore.release()
+        }
+    }
+
+    private fun logDnsViaSocksDrop(message: String) {
+        val now = System.currentTimeMillis()
+        val last = lastDnsViaSocksDropLogAt.get()
+        if (now - last >= 5_000 && lastDnsViaSocksDropLogAt.compareAndSet(last, now)) {
+            Log.w(TAG, message)
+        }
+    }
+
+    private fun logDnsViaSocksError(message: String) {
+        val now = System.currentTimeMillis()
+        val last = lastDnsViaSocksErrorLogAt.get()
+        if (now - last >= 5_000 && lastDnsViaSocksErrorLogAt.compareAndSet(last, now)) {
+            Log.e(TAG, message)
+        }
+    }
+
     private suspend fun forwardDnsQueryViaSocks(query: ByteArray, host: String, port: Int): ByteArray? {
         return withContext(Dispatchers.IO) {
             var socket: Socket? = null
             val streamId = dnsStreamCounter.incrementAndGet()
             try {
                 val serverAddr = InetAddress.getByName(host)
-                socket = connectionPool.connectTo(serverAddr, port, streamId)
+                socket = connectionPool.connectTo(serverAddr, port, streamId, maxRetries = 1)
                 if (socket == null) {
-                    Log.e(TAG, "[$streamId] DNS-over-Slipstream: SOCKS connect failed to $host:$port")
+                    logDnsViaSocksError("DNS-over-Slipstream: SOCKS connect failed to $host:$port")
                     return@withContext null
                 }
 
@@ -379,30 +417,30 @@ class KotlinTunnelManager(
 
                 val responseLengthBytes = ByteArray(2)
                 if (!readExact(input, responseLengthBytes)) {
-                    Log.e(TAG, "[$streamId] DNS-over-Slipstream: connection closed while reading length")
+                    logDnsViaSocksError("DNS-over-Slipstream: connection closed while reading length")
                     return@withContext null
                 }
 
                 val responseLength = ((responseLengthBytes[0].toInt() and 0xFF) shl 8) or
                     (responseLengthBytes[1].toInt() and 0xFF)
                 if (responseLength <= 0 || responseLength > 65535) {
-                    Log.e(TAG, "[$streamId] DNS-over-Slipstream: invalid response length: $responseLength")
+                    logDnsViaSocksError("DNS-over-Slipstream: invalid response length: $responseLength")
                     return@withContext null
                 }
 
                 val responseBuffer = ByteArray(responseLength)
                 if (!readExact(input, responseBuffer)) {
-                    Log.e(TAG, "[$streamId] DNS-over-Slipstream: connection closed while reading response")
+                    logDnsViaSocksError("DNS-over-Slipstream: connection closed while reading response")
                     return@withContext null
                 }
 
                 if (verboseLogging) Log.i(TAG, "[$streamId] DNS-over-Slipstream: received $responseLength bytes from $host:$port")
                 responseBuffer
             } catch (e: java.net.SocketTimeoutException) {
-                Log.e(TAG, "[$streamId] DNS-over-Slipstream: query timed out to $host:$port")
+                logDnsViaSocksError("DNS-over-Slipstream: query timed out to $host:$port")
                 null
             } catch (e: Exception) {
-                Log.e(TAG, "[$streamId] DNS-over-Slipstream: query failed: ${e.message}")
+                logDnsViaSocksError("DNS-over-Slipstream: query failed: ${e.message}")
                 null
             } finally {
                 try { socket?.close() } catch (_: Exception) {}
@@ -1503,17 +1541,16 @@ class Socks5ConnectionPool(
      * Connect to destination via local slipstream SOCKS5 proxy.
      * Returns the socket ready for data transfer, or null on failure.
      */
-    suspend fun connectTo(dstAddr: InetAddress, dstPort: Int, streamId: Long): Socket? {
-        return connectViaSocks5(dstAddr, dstPort, streamId)
+    suspend fun connectTo(dstAddr: InetAddress, dstPort: Int, streamId: Long, maxRetries: Int = 3): Socket? {
+        return connectViaSocks5(dstAddr, dstPort, streamId, maxRetries)
     }
 
     /**
      * Connect using SOCKS5 protocol to the local slipstream proxy.
      * Slipstream then tunnels the traffic through DNS to the destination.
      */
-    private suspend fun connectViaSocks5(dstAddr: InetAddress, dstPort: Int, streamId: Long): Socket? {
+    private suspend fun connectViaSocks5(dstAddr: InetAddress, dstPort: Int, streamId: Long, maxRetries: Int): Socket? {
         // Retry logic for DNS tunnel which can be slow under load
-        val maxRetries = 3
         var lastException: Exception? = null
 
         for (attempt in 1..maxRetries) {

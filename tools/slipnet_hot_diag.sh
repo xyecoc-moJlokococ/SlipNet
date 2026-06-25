@@ -81,6 +81,49 @@ dump_thermal() {
   echo
 }
 
+request_java_stack_dump() {
+  pid="$1"
+  [ -n "$pid" ] || return
+  echo "=== JAVA STACK DUMP REQUEST ==="
+  echo "$ kill -3 $pid"
+  kill -3 "$pid" 2>&1
+  echo "Waiting for ART stack dump in logcat..."
+  sleep 2
+  echo
+}
+
+save_java_stack_artifacts() {
+  stage="$1"
+  pid="$2"
+  [ -n "$pid" ] || return
+
+  traces="$BASE/${stage}_traces.txt"
+  trace_dir="$BASE/${stage}_anr_traces"
+  mkdir -p "$trace_dir"
+  {
+    echo "=== DATA ANR LIST ==="
+    ls -la /data/anr 2>&1
+    echo
+    echo "=== /data/anr/traces.txt ==="
+    cat /data/anr/traces.txt 2>&1
+    echo
+    echo "=== MATCHING /data/anr/trace_* FILES ==="
+    for trace in /data/anr/trace_*_"$pid"_*; do
+      [ -f "$trace" ] || continue
+      echo "--- $trace ---"
+      ls -la "$trace" 2>&1
+      cp "$trace" "$trace_dir/" 2>&1
+    done
+  } > "$traces" 2>&1
+
+  stacklog="$BASE/${stage}_stack_logcat.txt"
+  logcat -d -v threadtime 2>/dev/null | grep -E 'DALVIK THREADS|----- pid|Cmd line:|Signal Catcher|Wrote stack traces|\"DefaultDispatch|HeapTaskDaemon|at app\.slipnet|at kotlinx\.|native:|java:' > "$stacklog" 2>&1
+
+  echo "traces:   $traces"
+  echo "anr dir:  $trace_dir"
+  echo "stacklog: $stacklog"
+}
+
 snapshot() {
   stage="$1"
   out="$BASE/${stage}.txt"
@@ -99,6 +142,7 @@ snapshot() {
     if [ -n "$pid" ]; then
       run_cmd "TOP THREADS" sh -c "top -H -b -n 1 -p '$pid' 2>/dev/null || top -H -n 1 -p '$pid' 2>/dev/null || top -n 1 2>/dev/null | head -80"
       dump_threads "$pid"
+      request_java_stack_dump "$pid"
     fi
     run_cmd "DUMPSYS CPUINFO" dumpsys cpuinfo
     dump_thermal
@@ -108,7 +152,8 @@ snapshot() {
     run_cmd "IP ROUTE" ip route show table all
   } > "$out" 2>&1
 
-  logcat -d -v threadtime 2>/dev/null | grep -E 'SlipstreamNative|SlipstreamBridge|SlipstreamSocksBridge|SlipNetVpnService|KotlinTunnelManager|TunnelConnection|debug:|transfer_debug|no-progress|health|ANR|FATAL EXCEPTION' > "$log" 2>&1
+  logcat -d -v threadtime 2>/dev/null | grep -E 'SlipstreamNative|SlipstreamBridge|SlipstreamSocksBridge|SlipNetVpnService|KotlinTunnelManager|TunnelConnection|debug:|transfer_debug|no-progress|health|ANR|FATAL EXCEPTION|----- pid|Cmd line:|\"DefaultDispatch|HeapTaskDaemon|native:|java:|kotlinx\\.|app\\.slipnet' > "$log" 2>&1
+  save_java_stack_artifacts "$stage" "$pid"
 
   echo "snapshot: $out"
   echo "logcat:   $log"

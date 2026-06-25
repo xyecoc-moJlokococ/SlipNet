@@ -45,6 +45,23 @@ class TunInterface(private val fd: ParcelFileDescriptor) {
     }
 
     /**
+     * Read a packet into a caller-owned buffer.
+     * Returns the number of bytes read, or -1 when closed/no data/error.
+     */
+    fun readPacketInto(buffer: ByteArray): Int {
+        if (isClosed.get()) return -1
+
+        return try {
+            inputStream.read(buffer).takeIf { it > 0 } ?: -1
+        } catch (e: IOException) {
+            if (!isClosed.get()) {
+                Log.e(TAG, "Error reading from TUN: ${e.message}")
+            }
+            -1
+        }
+    }
+
+    /**
      * Write a packet to the TUN device.
      * Returns true if successful.
      */

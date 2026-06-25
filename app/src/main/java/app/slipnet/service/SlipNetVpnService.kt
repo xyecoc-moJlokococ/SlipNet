@@ -1529,7 +1529,8 @@ class SlipNetVpnService : VpnService() {
             verboseLogging = preferencesDataStore.debugLogging.first(),
             socksUsername = profile.socksUsername,
             socksPassword = profile.socksPassword,
-            forwardNonDnsUdpDirect = false
+            forwardNonDnsUdpDirect = false,
+            dnsViaSocks = true
         )
 
         val result = SlipstreamTunBridge.start(
@@ -1540,6 +1541,8 @@ class SlipNetVpnService : VpnService() {
 
         if (result.isSuccess) {
             setSlipstreamHealthState(TunnelHealthState.TUNNEL_READY, "direct TUN ready")
+            vpnRepository.setCurrentTunnelType(TunnelType.SLIPSTREAM)
+            vpnRepository.setProxyConnected(profile)
             Log.i(TAG, "Slipstream direct TUN ready: ${SlipstreamTunBridge.dumpState("direct-start-ok")}")
             finishConnection()
             return true
@@ -3762,7 +3765,7 @@ class SlipNetVpnService : VpnService() {
         // before apps like Telegram try to connect. Without this, the first
         // connections through a cold tunnel are slow and apps with aggressive
         // timeouts may fail and enter exponential backoff.
-        if (!isProxyOnly) {
+        if (!isProxyOnly && !SlipstreamTunBridge.isRunning()) {
             serviceScope.launch(Dispatchers.IO) {
                 try {
                     val proxyPort = preferencesDataStore.proxyListenPort.first()

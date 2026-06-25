@@ -34,6 +34,9 @@ data class KotlinTunnelConfig(
     val socksUsername: String? = null,
     val socksPassword: String? = null,
     val forwardNonDnsUdpDirect: Boolean = false,
+    // When true, DNS queries are sent as DNS-over-TCP through Slipstream SOCKS.
+    // This keeps website DNS working on networks that block direct UDP/53.
+    val dnsViaSocks: Boolean = false,
     // DNS forwarding through SSH (for SSH-only mode)
     // When > 0, DNS queries are sent via TCP to this local port (SSH port-forwarded)
     val dnsForwardPort: Int = 0
@@ -103,6 +106,7 @@ class KotlinTunnelManager(
     private val bytesReceived = AtomicLong(0)
     private val packetsSent = AtomicLong(0)
     private val packetsReceived = AtomicLong(0)
+    private val dnsStreamCounter = AtomicLong(10_000_000L)
 
     /**
      * Start the tunnel
@@ -312,7 +316,8 @@ class KotlinTunnelManager(
         val dstAddress = ipPacket.dstAddress
         val srcAddress = ipPacket.srcAddress
 
-        // Forward DNS query - use TCP through SSH if dnsForwardPort is set, otherwise direct UDP
+        // Forward DNS query. Direct Slipstream TUN must keep DNS inside Slipstream;
+        // direct UDP/53 is blocked on some whitelist networks.
         scope.launch(Dispatchers.IO) {
             try {
                 val dnsResponse = if (DnsUtils.isAAAAQuery(udpPayload)) {
@@ -320,6 +325,9 @@ class KotlinTunnelManager(
                 } else if (config.dnsForwardPort > 0) {
                     // Route DNS through SSH tunnel via TCP (DNS-over-TCP)
                     forwardDnsQueryViaTcp(udpPayload, "127.0.0.1", config.dnsForwardPort)
+                } else if (config.dnsViaSocks) {
+                    // Route DNS through Slipstream via SOCKS CONNECT + DNS-over-TCP.
+                    forwardDnsQueryViaSocks(udpPayload, config.dnsServer, 53)
                 } else {
                     // Direct UDP to DNS server (outside VPN)
                     forwardDnsQuery(udpPayload, config.dnsServer, 53)
@@ -341,6 +349,75 @@ class KotlinTunnelManager(
                 // Silently ignore DNS failures to reduce log spam
             }
         }
+    }
+
+    private suspend fun forwardDnsQueryViaSocks(query: ByteArray, host: String, port: Int): ByteArray? {
+        return withContext(Dispatchers.IO) {
+            var socket: Socket? = null
+            val streamId = dnsStreamCounter.incrementAndGet()
+            try {
+                val serverAddr = InetAddress.getByName(host)
+                socket = connectionPool.connectTo(serverAddr, port, streamId)
+                if (socket == null) {
+                    Log.e(TAG, "[$streamId] DNS-over-Slipstream: SOCKS connect failed to $host:$port")
+                    return@withContext null
+                }
+
+                socket.soTimeout = config.dnsTimeout
+                val output = socket.getOutputStream()
+                val input = socket.getInputStream()
+
+                val lengthPrefix = ByteArray(2)
+                lengthPrefix[0] = ((query.size shr 8) and 0xFF).toByte()
+                lengthPrefix[1] = (query.size and 0xFF).toByte()
+
+                output.write(lengthPrefix)
+                output.write(query)
+                output.flush()
+
+                if (verboseLogging) Log.d(TAG, "[$streamId] DNS-over-Slipstream: sent ${query.size} bytes to $host:$port")
+
+                val responseLengthBytes = ByteArray(2)
+                if (!readExact(input, responseLengthBytes)) {
+                    Log.e(TAG, "[$streamId] DNS-over-Slipstream: connection closed while reading length")
+                    return@withContext null
+                }
+
+                val responseLength = ((responseLengthBytes[0].toInt() and 0xFF) shl 8) or
+                    (responseLengthBytes[1].toInt() and 0xFF)
+                if (responseLength <= 0 || responseLength > 65535) {
+                    Log.e(TAG, "[$streamId] DNS-over-Slipstream: invalid response length: $responseLength")
+                    return@withContext null
+                }
+
+                val responseBuffer = ByteArray(responseLength)
+                if (!readExact(input, responseBuffer)) {
+                    Log.e(TAG, "[$streamId] DNS-over-Slipstream: connection closed while reading response")
+                    return@withContext null
+                }
+
+                if (verboseLogging) Log.i(TAG, "[$streamId] DNS-over-Slipstream: received $responseLength bytes from $host:$port")
+                responseBuffer
+            } catch (e: java.net.SocketTimeoutException) {
+                Log.e(TAG, "[$streamId] DNS-over-Slipstream: query timed out to $host:$port")
+                null
+            } catch (e: Exception) {
+                Log.e(TAG, "[$streamId] DNS-over-Slipstream: query failed: ${e.message}")
+                null
+            } finally {
+                try { socket?.close() } catch (_: Exception) {}
+            }
+        }
+    }
+
+    private fun readExact(input: java.io.InputStream, buffer: ByteArray): Boolean {
+        var offset = 0
+        while (offset < buffer.size) {
+            val read = input.read(buffer, offset, buffer.size - offset)
+            if (read == -1) return false
+            offset += read
+        }
+        return true
     }
 
     /**
